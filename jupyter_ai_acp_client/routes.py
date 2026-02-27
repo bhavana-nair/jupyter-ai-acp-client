@@ -77,3 +77,48 @@ class AcpSlashCommandsHandler(APIHandler):
 
         response = AcpSlashCommandsResponse(commands=commands)
         self.finish(response.model_dump())
+
+
+class StopStreamingHandler(APIHandler):
+    @property
+    def file_id_manager(self) -> BaseFileIdManager:
+        manager = self.serverapp.web_app.settings["file_id_manager"]
+        assert manager
+        return manager
+
+    @tornado.web.authenticated
+    async def post(self, persona_mention_name: str = ""):
+        chat_path = self.get_argument('chat_path', None)
+        if not chat_path:
+            raise tornado.web.HTTPError(400, "chat_path is required as a URL query parameter")
+
+        file_id = self.file_id_manager.get_id(chat_path)
+        if not file_id:
+            raise tornado.web.HTTPError(404, f"Chat not found: {chat_path}")
+        room_id = f"text:chat:{file_id}"
+
+        persona_manager: PersonaManager | None = self.serverapp.web_app.settings.get("jupyter-ai", {}).get("persona-managers", {}).get(room_id, None)
+        if not persona_manager:
+            raise tornado.web.HTTPError(404, f"Chat not initialized: {chat_path}")
+
+        persona = None
+        if persona_mention_name:
+            for p in persona_manager.personas.values():
+                if p.as_user().mention_name == persona_mention_name:
+                    persona = p
+                    break
+            if not persona:
+                raise tornado.web.HTTPError(404, f"Persona not found: @{persona_mention_name}")
+        else:
+            persona = persona_manager.last_mentioned_persona or persona_manager.default_persona
+
+        if not isinstance(persona, BaseAcpPersona):
+            raise tornado.web.HTTPError(409, "Persona is not an ACP persona")
+
+        client = await persona.get_client()
+        session_id = await persona.get_session_id()
+        if not session_id:
+            raise tornado.web.HTTPError(409, "No active session for this persona")
+
+        await client.stop_streaming(session_id)
+        self.finish({"status": "stopped"})

@@ -87,6 +87,7 @@ class JaiAcpClient(Client):
         self._terminal_manager = TerminalManager(event_loop)
         self._tool_call_manager = ToolCallManager()
         super().__init__(*args, **kwargs)
+        self._cancel_requested: bool = False
 
 
     async def _init_connection(self) -> ClientSideConnection:
@@ -395,3 +396,30 @@ class JaiAcpClient(Client):
 
     async def ext_notification(self, method: str, params: dict) -> None:
         raise RequestError.method_not_found(method)
+
+    async def stop_streaming(self, session_id: str) -> None:
+    """Cancel an in-progress prompt for the given session."""
+    persona = self._personas_by_session.get(session_id)
+    if not persona:
+        return
+
+    self._cancel_requested = True
+
+    # Notify the ACP agent to stop
+    try:
+        conn = await self.get_connection()
+        await conn.cancel(session_id)
+    except Exception:
+        if persona:
+            persona.log.warning(f"stop_streaming: failed to send cancel for session {session_id}")
+
+    # Finalize the partial message as-is
+    message_id = self._tool_call_manager.get_message_id(session_id)
+    if message_id:
+        msg = persona.ychat.get_message(message_id)
+        if msg:
+            persona.ychat.update_message(msg, append=False, trigger_actions=[find_mentions])
+
+    # Reset awareness
+    persona.awareness.set_local_state_field("isWriting", False)
+

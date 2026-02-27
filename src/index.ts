@@ -147,3 +147,7 @@ export const slashCommandPlugin: JupyterFrontEndPlugin<void> = {
 };
 
 export default slashCommandPlugin;
+
+export { stopStreaming } from './request';
+export { createStopButton } from './stop-button';
+export type { IStopButtonProps } from './stop-button';
