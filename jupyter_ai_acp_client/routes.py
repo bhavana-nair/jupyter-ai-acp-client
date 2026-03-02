@@ -110,9 +110,7 @@ class PermissionHandler(APIHandler):
                     logger.debug(f"    {persona_id}: not BaseAcpPersona, skipping")
                     continue
                 client = await persona.get_client()
-                known_sessions = client.list_sessions()
-                logger.debug(f"    {persona_id}: known_sessions={known_sessions}")
-                if session_id in known_sessions:
+                if client.includes_session(session_id):
                     logger.debug(f"    FOUND client for session {session_id}")
                     return client
         logger.debug(f"_find_client_for_session: no client found for session_id={session_id}")

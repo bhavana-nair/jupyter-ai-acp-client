@@ -278,6 +278,9 @@ class JaiAcpClient(Client):
         if isinstance(update, AgentMessageChunk):
             self._handle_agent_message_chunk(session_id, update)
             return
+    def includes_session(self, session_id: str) -> bool:
+        """Returns whether this client manages the given session."""
+        return session_id in self._personas_by_session
 
     def resolve_permission(self, session_id: str, tool_call_id: str, option_id: str) -> bool:
         """
@@ -325,6 +328,13 @@ class JaiAcpClient(Client):
             # then flush to Yjs so the frontend renders the buttons.
             session_state = self._tool_call_manager._ensure_session(session_id)
             tc = session_state.tool_calls.get(tool_call.tool_call_id)
+            if tc is None:
+                persona.log.warning(
+                    f"request_permission: tool_call_id={tool_call.tool_call_id} not found in session {session_id}"
+                )
+                raise RequestError.invalid_params(
+                    {"tool_call_id": f"Unknown tool_call_id: {tool_call.tool_call_id}"}
+                )
             tc.permission_options = permission_options
             tc.permission_status = "pending"
             tc.session_id = session_id

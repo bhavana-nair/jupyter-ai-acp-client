@@ -29,6 +29,7 @@ class PermissionManager:
 
     def __init__(self, loop: asyncio.AbstractEventLoop):
         self._pending: dict[tuple[str, str], PendingRequest] = {}
+        self._session_index: dict[str, set[tuple[str, str]]] = {}
         self._loop = loop
 
     def create_request(
@@ -43,6 +44,7 @@ class PermissionManager:
         key = (session_id, tool_call_id)
         future: asyncio.Future[str] = self._loop.create_future()
         self._pending[key] = PendingRequest(future=future, options=options or [])
+        self._session_index.setdefault(session_id, set()).add(key)
         return future
 
     def resolve(self, session_id: str, tool_call_id: str, option_id: str) -> bool:
@@ -60,16 +62,24 @@ class PermissionManager:
         return True
 
     def cleanup(self, session_id: str, tool_call_id: str) -> None:
-        """Remove a pending permission request."""
-        self._pending.pop((session_id, tool_call_id), None)
+        """Remove a pending permission request and update the session index."""
+        key = (session_id, tool_call_id)
+        self._pending.pop(key, None)
+        session_keys = self._session_index.get(session_id)
+        if session_keys is not None:
+            session_keys.discard(key)
+            if not session_keys:
+                del self._session_index[session_id]
+
 
     def reject_all_pending(self, session_id: str) -> int:
         """
         Auto-reject all pending permission requests for a session.
         """
-        rejected = 0
-        keys_to_remove = [key for key in self._pending if key[0] == session_id]
-        for key in keys_to_remove:
+        #keys belonging to specific session
+        keys = self._session_index.pop(session_id, set())
+        rejected = 0 
+        for key in keys:
             req = self._pending.pop(key, None)
             if req is not None and not req.future.done():
                 reject_id = self._find_reject_option_id(req.options)
@@ -83,6 +93,6 @@ class PermissionManager:
         Find the reject option_id from the options list.
         """
         for opt in options:
-            if opt.kind and "reject" in opt.kind:
+            if opt.kind and "reject_once" in opt.kind:
                 return opt.option_id
         return "reject_once"

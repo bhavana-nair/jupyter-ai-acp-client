@@ -4,8 +4,12 @@ from jupyter_ai_acp_client.tool_call_renderer import (
     _generate_title,
     update_tool_call_from_start,
     update_tool_call_from_progress,
-    serialize_tool_calls,
 )
+
+
+def _serialize(tool_calls: dict[str, ToolCallState]) -> list[dict]:
+    """Helper to serialize tool calls using model_dump."""
+    return [tc.model_dump(exclude_none=True) for tc in tool_calls.values()]
 
 
 class TestUpdateToolCallFromStart:
@@ -159,7 +163,7 @@ class TestUpdateToolCallFromProgress:
 
 class TestSerializeToolCalls:
     def test_empty_dict(self):
-        result = serialize_tool_calls({})
+        result = _serialize({})
         assert result == []
 
     def test_single_tool_call(self):
@@ -171,7 +175,7 @@ class TestSerializeToolCalls:
                 status="in_progress",
             )
         }
-        result = serialize_tool_calls(tool_calls)
+        result = _serialize(tool_calls)
         assert len(result) == 1
         assert result[0] == {
             "tool_call_id": "tc-1",
@@ -190,7 +194,7 @@ class TestSerializeToolCalls:
                 raw_output=None,
             )
         }
-        result = serialize_tool_calls(tool_calls)
+        result = _serialize(tool_calls)
         assert len(result) == 1
         assert result[0] == {
             "tool_call_id": "tc-1",
@@ -207,7 +211,7 @@ class TestSerializeToolCalls:
                 raw_output="file1\nfile2\n",
             )
         }
-        result = serialize_tool_calls(tool_calls)
+        result = _serialize(tool_calls)
         assert result[0]["raw_output"] == "file1\nfile2\n"
 
     def test_multiple_tool_calls(self):
@@ -225,7 +229,7 @@ class TestSerializeToolCalls:
                 status="in_progress",
             ),
         }
-        result = serialize_tool_calls(tool_calls)
+        result = _serialize(tool_calls)
         assert len(result) == 2
         ids = [r["tool_call_id"] for r in result]
         assert "tc-1" in ids
@@ -240,7 +244,7 @@ class TestSerializeToolCalls:
                 raw_output={"key": "value"},
             )
         }
-        result = serialize_tool_calls(tool_calls)
+        result = _serialize(tool_calls)
         assert result[0]["raw_output"] == {"key": "value"}
 
     def test_list_raw_output(self):
@@ -252,7 +256,7 @@ class TestSerializeToolCalls:
                 raw_output=["item1", "item2"],
             )
         }
-        result = serialize_tool_calls(tool_calls)
+        result = _serialize(tool_calls)
         assert result[0]["raw_output"] == ["item1", "item2"]
 
     def test_serializes_locations(self):
@@ -265,7 +269,7 @@ class TestSerializeToolCalls:
                 locations=["/Users/foo/project/justfile"],
             )
         }
-        result = serialize_tool_calls(tool_calls)
+        result = _serialize(tool_calls)
         assert result[0]["locations"] == ["/Users/foo/project/justfile"]
 
     def test_strips_none_locations(self):
@@ -277,7 +281,7 @@ class TestSerializeToolCalls:
                 locations=None,
             )
         }
-        result = serialize_tool_calls(tool_calls)
+        result = _serialize(tool_calls)
         assert "locations" not in result[0]
 
 
@@ -426,7 +430,7 @@ class TestShortenTitleIntegration:
         assert tool_calls["tc-1"].status == "completed"
 
         # Serialize — locations should be included for frontend
-        result = serialize_tool_calls(tool_calls)
+        result = _serialize(tool_calls)
         assert result[0]["title"] == "Read justfile"
         assert result[0]["locations"] == ["/Users/aieroshe/Documents/project/justfile"]
         assert result[0]["status"] == "completed"
