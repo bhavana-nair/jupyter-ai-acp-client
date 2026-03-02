@@ -130,6 +130,7 @@ class JaiAcpClient(Client):
         lock = self._prompt_locks_by_session.setdefault(session_id, asyncio.Lock())
 
         async with lock:
+            self._cancel_requested = False
             conn = await self.get_connection()
             persona = self._personas_by_session[session_id]
 
@@ -149,6 +150,10 @@ class JaiAcpClient(Client):
                     ],
                     session_id=session_id
                 )
+
+                # If cancelled, message already finalized by stop_streaming()
+                if self._cancel_requested:
+                    return response
 
                 # Trigger find_mentions on the final message
                 message_id = self._tool_call_manager.get_message_id(session_id)
@@ -227,6 +232,10 @@ class JaiAcpClient(Client):
                 return
             if persona and hasattr(persona, 'acp_slash_commands'):
                 persona.acp_slash_commands = update.available_commands
+            return
+
+        # Skip message/tool events when cancellation has been requested
+        if self._cancel_requested:
             return
 
         if persona is None:
@@ -398,28 +407,28 @@ class JaiAcpClient(Client):
         raise RequestError.method_not_found(method)
 
     async def stop_streaming(self, session_id: str) -> None:
-    """Cancel an in-progress prompt for the given session."""
-    persona = self._personas_by_session.get(session_id)
-    if not persona:
-        return
+        """Cancel an in-progress prompt for the given session."""
+        persona = self._personas_by_session.get(session_id)
+        if not persona:
+            return
 
-    self._cancel_requested = True
+        self._cancel_requested = True
 
-    # Notify the ACP agent to stop
-    try:
-        conn = await self.get_connection()
-        await conn.cancel(session_id)
-    except Exception:
-        if persona:
-            persona.log.warning(f"stop_streaming: failed to send cancel for session {session_id}")
+        # Notify the ACP agent to stop
+        try:
+            conn = await self.get_connection()
+            await conn.cancel(session_id)
+        except Exception:
+            if persona:
+                persona.log.warning(f"stop_streaming: failed to send cancel for session {session_id}")
 
-    # Finalize the partial message as-is
-    message_id = self._tool_call_manager.get_message_id(session_id)
-    if message_id:
-        msg = persona.ychat.get_message(message_id)
-        if msg:
-            persona.ychat.update_message(msg, append=False, trigger_actions=[find_mentions])
+        # Finalize the partial message as-is
+        message_id = self._tool_call_manager.get_message_id(session_id)
+        if message_id:
+            msg = persona.ychat.get_message(message_id)
+            if msg:
+                persona.ychat.update_message(msg, append=False, trigger_actions=[find_mentions])
 
-    # Reset awareness
-    persona.awareness.set_local_state_field("isWriting", False)
+        # Reset awareness
+        persona.awareness.set_local_state_field("isWriting", False)
 
