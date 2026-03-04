@@ -534,6 +534,13 @@ class JaiAcpClient(Client):
         # Reset awareness
         persona.awareness.set_local_state_field("isWriting", False)
 
+        rejected = self._permission_manager.reject_all_pending(session_id)
+        if rejected:
+            persona.log.info(
+                f"stop_streaming: auto-rejected {rejected} pending permission(s) for session {session_id}"
+            )
+            # Flush updated tool call state so frontend removes permission buttons
+            self._tool_call_manager._flush_to_message(session_id, persona)
 
 
 
