@@ -156,7 +156,8 @@ export const slashCommandPlugin: JupyterFrontEndPlugin<void> = {
 export const toolbarPlugin: JupyterFrontEndPlugin<IInputToolbarRegistryFactory> =
   {
     id: '@jupyter-ai/acp-client:toolbar',
-    description: 'Provides a chat input toolbar with ACP stop streaming button.',
+    description:
+      'Provides a chat input toolbar with ACP stop streaming button.',
     autoStart: true,
     provides: IInputToolbarRegistryFactory,
     activate: (): IInputToolbarRegistryFactory => {

@@ -1,9 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import StopIcon from '@mui/icons-material/Stop';
-import {
-  InputToolbarRegistry,
-  TooltippedIconButton
-} from '@jupyter/chat';
+import { InputToolbarRegistry, TooltippedIconButton } from '@jupyter/chat';
 import { stopStreaming } from './request';
 
 const STOP_BUTTON_CLASS = 'jp-jupyter-ai-acp-client-stopButton';
