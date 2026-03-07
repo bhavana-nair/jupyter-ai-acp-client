@@ -101,21 +101,22 @@ class BaseAcpPersona(BasePersona):
             stderr=sys.stderr,
             limit=50 * 1024 * 1024,
         )
-        self.log.info(f"Spawned ACP agent subprocess for '{self.__class__.__name__}'.")
+        self.log.info("Spawned ACP agent subprocess for '%s'.", self.__class__.__name__)
         return process
 
     async def _init_client(self) -> JaiAcpClient:
         agent_subprocess = await self.get_agent_subprocess()
         client = JaiAcpClient(agent_subprocess=agent_subprocess, event_loop=self.event_loop)
-        self.log.info(f"Initialized ACP client for '{self.__class__.__name__}'.")
+        self.log.info("Initialized ACP client for '%s'.", self.__class__.__name__)
         return client
     
     async def _init_client_session(self) -> NewSessionResponse:
         client = await self.get_client()
         session = await client.create_session(persona=self)
         self.log.info(
-            f"Initialized new ACP client session for '{self.__class__.__name__}'"
-            f" with ID '{session.session_id}'."
+            "Initialized new ACP client session for '%s' with ID '%s'.",
+            self.__class__.__name__,
+            session.session_id,
         )
         return session
 
@@ -212,22 +213,50 @@ class BaseAcpPersona(BasePersona):
     @acp_slash_commands.setter
     def acp_slash_commands(self, commands: list[AvailableCommand]):
         self.log.info(
-            f"Setting {len(commands)} slash commands for '{self.name}' in room '{self.parent.room_id}'."
+            "Setting %d slash commands for '%s' in room '%s'.",
+            len(commands),
+            self.name,
+            self.parent.room_id,
         )
         self._acp_slash_commands = commands
 
     def shutdown(self):
         # TODO: allow shutdown() to be async
+        if getattr(self, '_shutting_down', False):
+            return
+        self._shutting_down = True
         self.event_loop.create_task(self._shutdown())
 
     async def _shutdown(self):
-        self.log.info(f"Closing ACP agent and client for '{self.__class__.__name__}'.")
+        self.log.info("Closing ACP agent and client for '%s'.", self.__class__.__name__)
         client = await self.get_client()
-        conn = await client.get_connection()
-        await conn.close()
-        subprocess = await self.get_agent_subprocess()
         try:
+            session = await self._client_session_future
+            await client.end_session(session.session_id)
+        except Exception:
+            self.log.warning(
+                "Failed to clean up session resources during shutdown for '%s'.",
+                self.__class__.__name__,
+                exc_info=True,
+            )
+        try:
+            conn = await client.get_connection()
+            await conn.close()
+        except Exception:
+            self.log.warning(
+                "Failed to close connection during shutdown for '%s'.",
+                self.__class__.__name__,
+                exc_info=True,
+            )
+        try:
+            subprocess = await self.get_agent_subprocess()
             subprocess.kill()
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError, OSError):
             pass
-        self.log.info(f"Completed closed ACP agent and client for '{self.__class__.__name__}'.")
+        except Exception:
+            self.log.warning(
+                "Failed to kill subprocess during shutdown for '%s'.",
+                self.__class__.__name__,
+                exc_info=True,
+            )
+        self.log.info("Successfully closed ACP agent and client for '%s'.", self.__class__.__name__)
