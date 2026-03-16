@@ -10,6 +10,7 @@ from jupyter_ai_persona_manager import BasePersona
 from jupyterlab_chat.models import Message
 
 from .default_acp_client import JaiAcpClient
+from .telemetry import emit_server_init_event, emit_session_init_event
 
 
 
@@ -105,10 +106,17 @@ class BaseAcpPersona(BasePersona):
         return process
 
     async def _init_client(self) -> JaiAcpClient:
-        agent_subprocess = await self.get_agent_subprocess()
-        client = JaiAcpClient(agent_subprocess=agent_subprocess, event_loop=self.event_loop)
-        self.log.info("Initialized ACP client for '%s'.", self.__class__.__name__)
-        return client
+        try:
+            agent_subprocess = await self.get_agent_subprocess()
+            client = JaiAcpClient(agent_subprocess=agent_subprocess, event_loop=self.event_loop)
+            self.log.info("Initialized ACP client for '%s'.", self.__class__.__name__)
+            emit_server_init_event(self.event_logger, self.__class__.__name__, "success")
+            self.log.info("[telemetry] Emitted acp_server_init (success) for '%s'.", self.__class__.__name__)
+            return client
+        except Exception as e:
+            error_msg = f"{type(e).__name__}: {e}"
+            emit_server_init_event(self.event_logger, self.__class__.__name__, "failure", error_msg)
+            raise
     
     def _get_existing_sessions(self) -> dict[str, str]:
         """
@@ -141,26 +149,45 @@ class BaseAcpPersona(BasePersona):
         existing_session_id = self._get_existing_sessions().get(self.id, None)
         supports_session_load = (await client.get_agent_capabilities()).load_session
 
-        if existing_session_id and supports_session_load:
-            # load existing session if one exists and the agent indicates it
-            # supports loading sessions in its agent capabilities
-            response = await client.load_session(persona=self, session_id=existing_session_id)
-            self.log.info(
-                "Loaded existing ACP client session for '%s' with ID '%s'.",
-                self.__class__.__name__,
-                existing_session_id,
+        try:
+            if existing_session_id and supports_session_load:
+                # load existing session if one exists and the agent indicates it
+                # supports loading sessions in its agent capabilities
+                response = await client.load_session(persona=self, session_id=existing_session_id)
+                self.log.info(
+                    "Loaded existing ACP client session for '%s' with ID '%s'.",
+                    self.__class__.__name__,
+                    existing_session_id,
+                )
+                emit_session_init_event(
+                    self.event_logger, self.__class__.__name__,
+                    existing_session_id, "load", "success"
+                )
+                self.log.info("[telemetry] Emitted acp_session_init (load/success) for '%s'.", self.__class__.__name__)
+                return response
+            else:
+                # otherwise create new session and add it to the metadata
+                response = await client.create_session(persona=self)
+                self.log.info(
+                    "Initialized new ACP client session for '%s' with ID '%s'.",
+                    self.__class__.__name__,
+                    response.session_id,
+                )
+                emit_session_init_event(
+                    self.event_logger, self.__class__.__name__,
+                    response.session_id, "new", "success"
+                )
+                self.log.info("[telemetry] Emitted acp_session_init (new/success) for '%s'.", self.__class__.__name__)
+                self._record_new_session(response.session_id)
+                return response
+        except Exception as e:
+            operation = "load" if (existing_session_id and supports_session_load) else "new"
+            error_msg = f"{type(e).__name__}: {e}"
+            emit_session_init_event(
+                self.event_logger, self.__class__.__name__,
+                None, operation, "failure", error_msg
             )
-            return response
-        else:
-            # otherwise create new session and add it to the metadata
-            response = await client.create_session(persona=self)
-            self.log.info(
-                "Initialized new ACP client session for '%s' with ID '%s'.",
-                self.__class__.__name__,
-                response.session_id,
-            )
-            self._record_new_session(response.session_id)
-            return response
+            raise
 
     async def get_agent_subprocess(self) -> asyncio.subprocess.Process:
         """
@@ -306,3 +333,15 @@ class BaseAcpPersona(BasePersona):
                 exc_info=True,
             )
         self.log.info("Successfully closed ACP agent and client for '%s'.", self.__class__.__name__)
+
+    @property
+    def event_logger(self):
+        """Return the Jupyter EventLogger, or None if unavailable."""
+        try:
+            from jupyter_events import EventLogger
+            extension_app = self.parent.parent  # ExtensionApp instance
+            event_logger: EventLogger = extension_app.serverapp.event_logger
+            return event_logger
+        except Exception:
+            self.log.warning("EventLogger unavailable; telemetry will be skipped.")
+            return None
