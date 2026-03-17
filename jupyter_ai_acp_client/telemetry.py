@@ -85,3 +85,22 @@ def emit_event(
         event_logger.emit(schema_id=SCHEMA_ID, data=data)
     except Exception:
         logger.warning("Failed to emit telemetry event %s.", operation, exc_info=True)
+
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def track(event_logger, operation, details=None):
+    """Emit success/failure telemetry around a block of code.
+
+    On normal completion emits outcome="success". On exception emits
+    outcome="failure" with the error message appended to details, then
+    re-raises.
+    """
+    try:
+        yield
+        emit_event(event_logger, operation, "success", details)
+    except Exception as e:
+        fail_details = {**(details or {}), "error_message": f"{type(e).__name__}: {e}"}
+        emit_event(event_logger, operation, "failure", fail_details)
+        raise
