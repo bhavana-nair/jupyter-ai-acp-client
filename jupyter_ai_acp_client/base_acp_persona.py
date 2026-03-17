@@ -10,7 +10,7 @@ from jupyter_ai_persona_manager import BasePersona
 from jupyterlab_chat.models import Message
 
 from .default_acp_client import JaiAcpClient
-from .telemetry import emit_server_init_event, emit_session_init_event
+from .telemetry import emit_server_init_event, emit_session_init_event, emit_chat_message_event
 
 
 
@@ -248,6 +248,12 @@ class BaseAcpPersona(BasePersona):
 
         client = await self.get_client()
         session_id = await self.get_session_id()
+
+        emit_chat_message_event(
+            self.event_logger,
+            self.__class__.__name__,
+            session_id,
+        )
 
         prompt = message.body.replace("@" + self.as_user().mention_name, "").strip()
 

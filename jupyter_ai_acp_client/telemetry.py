@@ -23,6 +23,9 @@ _SERVER_INIT_SCHEMA_ID = (
 _SESSION_INIT_SCHEMA_ID = (
     "https://jupyter-ai.amazon.com/jupyter_ai_acp_client/events/acp_session_init"
 )
+_CHAT_MESSAGE_SCHEMA_ID = (
+    "https://jupyter-ai/jupyter_ai_acp_client/events/acp_chat_message"
+)
 
 ACP_SERVER_INIT_SCHEMA: dict = {
     "$id": _SERVER_INIT_SCHEMA_ID,
@@ -91,6 +94,32 @@ ACP_SESSION_INIT_SCHEMA: dict = {
 }
 
 
+ACP_CHAT_MESSAGE_SCHEMA: dict = {
+    "$id": _CHAT_MESSAGE_SCHEMA_ID,
+    "version": "1",
+    "title": "ACP Chat Message Event",
+    "description": (
+        "Emitted when a user sends a message to an ACP-enabled persona. "
+        "No message content or PII is recorded."
+    ),
+    "type": "object",
+    "properties": {
+        "operation": {
+            "type": "string",
+            "const": "acp_chat_message",
+        },
+        "persona_class": {
+            "type": "string",
+        },
+        "session_id": {
+            "type": ["string", "null"],
+        },
+    },
+    "required": ["operation", "persona_class", "session_id"],
+    "additionalProperties": False,
+}
+
+
 def register_telemetry_schemas(event_logger: EventLogger) -> None:
     """Register all telemetry event schemas with the EventLogger.
 
@@ -99,6 +128,7 @@ def register_telemetry_schemas(event_logger: EventLogger) -> None:
     try:
         event_logger.register_event_schema(ACP_SERVER_INIT_SCHEMA)
         event_logger.register_event_schema(ACP_SESSION_INIT_SCHEMA)
+        event_logger.register_event_schema(ACP_CHAT_MESSAGE_SCHEMA)
     except Exception:
         logger.error("Failed to register telemetry event schemas.", exc_info=True)
 
@@ -157,3 +187,27 @@ def emit_session_init_event(
         )
     except Exception:
         logger.warning("Failed to emit session init telemetry event.", exc_info=True)
+
+
+def emit_chat_message_event(
+    event_logger: EventLogger | None,
+    persona_class: str,
+    session_id: str | None,
+) -> None:
+    """Emit an ACP chat message event.
+
+    No-op if event_logger is None.
+    """
+    if event_logger is None:
+        return
+    try:
+        event_logger.emit(
+            schema_id=_CHAT_MESSAGE_SCHEMA_ID,
+            data={
+                "operation": "acp_chat_message",
+                "persona_class": persona_class,
+                "session_id": session_id,
+            },
+        )
+    except Exception:
+        logger.warning("Failed to emit chat message telemetry event.", exc_info=True)

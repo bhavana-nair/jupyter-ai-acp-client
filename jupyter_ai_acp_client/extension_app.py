@@ -21,7 +21,7 @@ class JaiAcpClientExtension(ExtensionApp):
         import json
         import logging
         import os
-        from .telemetry import register_telemetry_schemas, _SERVER_INIT_SCHEMA_ID, _SESSION_INIT_SCHEMA_ID
+        from .telemetry import register_telemetry_schemas, _SERVER_INIT_SCHEMA_ID, _SESSION_INIT_SCHEMA_ID, _CHAT_MESSAGE_SCHEMA_ID
 
         try:
             event_logger = self.serverapp.event_logger
@@ -39,6 +39,10 @@ class JaiAcpClientExtension(ExtensionApp):
             )
             event_logger.add_listener(
                 schema_id=_SESSION_INIT_SCHEMA_ID,
+                listener=_log_telemetry_event,
+            )
+            event_logger.add_listener(
+                schema_id=_CHAT_MESSAGE_SCHEMA_ID,
                 listener=_log_telemetry_event,
             )
             self.log.info("Telemetry schemas and event listeners registered.")
