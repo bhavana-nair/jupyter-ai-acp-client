@@ -58,8 +58,8 @@ def _make_client_and_persona():
     persona = MagicMock()
     persona.log = MagicMock()
     persona.awareness = MagicMock()
-    persona.ychat = MagicMock()
-    persona.ychat.get_message.return_value = None
+    persona.chat = MagicMock()
+    persona.chat.get_message.return_value = None
 
     # Mock tool call manager
     client._tool_call_manager = MagicMock()
@@ -265,7 +265,7 @@ def _real_usage_persona():
     # A real awareness slot so `_sync_awareness_usage` -> `report_usage`
     # round-trips through the real typed properties.
     persona.awareness = _awareness()
-    persona.ychat = MagicMock()
+    persona.chat = MagicMock()
     return persona
 
 

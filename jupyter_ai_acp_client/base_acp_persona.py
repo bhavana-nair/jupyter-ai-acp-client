@@ -241,7 +241,7 @@ class BaseAcpPersona(BasePersona):
         """
         Returns ACP session IDs from this chat's metadata, keyed by persona ID.
         """
-        sessions = self.ychat.get_metadata().get("acp_session_ids", {})
+        sessions = self.chat.get_metadata().get("acp_session_ids", {})
         return sessions
 
     def _record_new_session(self, new_session_id: str) -> None:
@@ -249,10 +249,10 @@ class BaseAcpPersona(BasePersona):
         Adds a new ACP session ID into this chat's metadata. Always use this
         method to avoid deleting other clients' sessions.
 
-        Updates the `ychat._ydoc["metadata"]` shared type internally.
+        Updates the chat metadata internally.
         """
         existing_session_ids = self._get_existing_sessions()
-        self.ychat.set_metadata(
+        self.chat.set_metadata(
             "acp_session_ids", {**existing_session_ids, self.id: new_session_id}
         )
 
@@ -456,14 +456,14 @@ class BaseAcpPersona(BasePersona):
         Caps at _MAX_HISTORY_MESSAGES to avoid exceeding agent context window
         limits.
         """
-        all_messages = self.ychat.get_messages()
+        all_messages = self.chat.get_messages()
         recent = [
             m for m in all_messages
             if not m.deleted and m.id != exclude_id
         ][-self._MAX_HISTORY_MESSAGES:]
         if not recent:
             return ""
-        users = self.ychat.get_users()
+        users = self.chat.get_users()
         lines = []
         for msg in recent:
             user = users.get(msg.sender)
@@ -517,7 +517,7 @@ class BaseAcpPersona(BasePersona):
         # Resolve attachments from YChat by ID
         attachments: list[dict] | None = None
         if message.attachments:
-            all_attachments = self.ychat.get_attachments()
+            all_attachments = self.chat.get_attachments()
             resolved = []
             for aid in message.attachments:
                 raw = all_attachments.get(aid)
@@ -620,12 +620,12 @@ class BaseAcpPersona(BasePersona):
 
     def _record_mode_choice(self, mode_id: str) -> None:
         """Persist the selected mode in chat metadata, keyed by persona ID."""
-        existing = self.ychat.get_metadata().get("acp_modes", {})
-        self.ychat.set_metadata("acp_modes", {**existing, self.id: mode_id})
+        existing = self.chat.get_metadata().get("acp_modes", {})
+        self.chat.set_metadata("acp_modes", {**existing, self.id: mode_id})
 
     def _get_stored_mode_choice(self) -> Optional[str]:
         """Return the mode previously selected for this persona in this chat."""
-        return self.ychat.get_metadata().get("acp_modes", {}).get(self.id)
+        return self.chat.get_metadata().get("acp_modes", {}).get(self.id)
 
     @property
     def acp_config_options(self) -> list[AcpConfigOption]:
@@ -662,15 +662,15 @@ class BaseAcpPersona(BasePersona):
 
     def _record_config_choice(self, config_id: str, value: str | bool) -> None:
         """Persist a config option value in chat metadata, keyed by persona ID."""
-        all_choices = self.ychat.get_metadata().get("acp_config_options", {})
+        all_choices = self.chat.get_metadata().get("acp_config_options", {})
         persona_choices = {**all_choices.get(self.id, {}), config_id: value}
-        self.ychat.set_metadata(
+        self.chat.set_metadata(
             "acp_config_options", {**all_choices, self.id: persona_choices}
         )
 
     def _get_stored_config_choices(self) -> dict[str, str | bool]:
         """Return config option values previously selected for this persona here."""
-        return self.ychat.get_metadata().get("acp_config_options", {}).get(self.id, {})
+        return self.chat.get_metadata().get("acp_config_options", {}).get(self.id, {})
 
     ################################################
     # persona-manager awareness API

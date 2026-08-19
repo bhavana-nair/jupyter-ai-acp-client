@@ -275,7 +275,7 @@ class JaiAcpClient(Client):
             persona.log.info(f"prompt_and_reply: starting for session {session_id}")
 
             # Set awareness to indicate writing
-            persona.awareness.set_local_state_field("isWriting", True)
+            persona.set_writing_status(True)
 
             try:
                 # Build content blocks: text prompt + optional attachment resources
@@ -335,9 +335,9 @@ class JaiAcpClient(Client):
 
                 # Trigger find_mentions on all messages created this turn
                 for message_id in self._tool_call_manager.get_all_message_ids(session_id):
-                    msg = persona.ychat.get_message(message_id)
+                    msg = persona.chat.get_message(message_id)
                     if msg:
-                        persona.ychat.update_message(
+                        persona.chat.update_message(
                             msg,
                             trigger_actions=[find_mentions],
                         )
@@ -349,7 +349,7 @@ class JaiAcpClient(Client):
                 raise
             finally:
                 # Clear awareness writing state
-                persona.awareness.set_local_state_field("isWriting", False)
+                persona.set_writing_status(False)
 
     def _handle_agent_message_chunk(self, session_id: str, update: AgentMessageChunk) -> None:
         """Handle an AgentMessageChunk event by appending text to the message."""
@@ -381,7 +381,7 @@ class JaiAcpClient(Client):
             sender=persona.id,
             raw_time=False,
         )
-        persona.ychat.update_message(msg, append=True, trigger_actions=[])
+        persona.chat.update_message(msg, append=True, trigger_actions=[])
 
     async def session_update(
         self,
@@ -762,12 +762,12 @@ class JaiAcpClient(Client):
 
         # Finalize all messages created this turn
         for message_id in self._tool_call_manager.get_all_message_ids(session_id):
-            msg = persona.ychat.get_message(message_id)
+            msg = persona.chat.get_message(message_id)
             if msg:
-                persona.ychat.update_message(msg, append=False, trigger_actions=[find_mentions])
+                persona.chat.update_message(msg, append=False, trigger_actions=[find_mentions])
 
         # Reset awareness
-        persona.awareness.set_local_state_field("isWriting", False)
+        persona.set_writing_status(False)
 
         self._cancel_pending_work(session_id)
 

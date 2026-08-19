@@ -96,7 +96,7 @@ def _awareness_persona(
     persona = _Concrete.__new__(_Concrete)
     persona.log = logging.getLogger("test")
     persona.awareness = _awareness()
-    persona.ychat = MagicMock()
+    persona.chat = MagicMock()
     persona._acp_modes = modes or []
     persona._acp_current_mode_id = current_mode
     persona._acp_config_options = config_options or []
