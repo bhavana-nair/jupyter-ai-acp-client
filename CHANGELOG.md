@@ -2,6 +2,36 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## 0.3.0a0
+
+([Full Changelog](https://github.com/jupyter-ai-contrib/jupyter-ai-acp-client/compare/v0.2.1...ae520b418d57015c1651859fb33268f788327815))
+
+### Enhancements made
+
+- Decouple ACP client from YChat [#173](https://github.com/jupyter-ai-contrib/jupyter-ai-acp-client/pull/173) ([@bhavana-nair](https://github.com/bhavana-nair), [@dlqqq](https://github.com/dlqqq))
+
+### Maintenance and upkeep improvements
+
+- Add E2E test matrix [#178](https://github.com/jupyter-ai-contrib/jupyter-ai-acp-client/pull/178) ([@dlqqq](https://github.com/dlqqq))
+
+### Other merged PRs
+
+- Bump the npm-security-updates group across 1 directory with 3 updates [#179](https://github.com/jupyter-ai-contrib/jupyter-ai-acp-client/pull/179) ([@dlqqq](https://github.com/dlqqq))
+- Bump the npm-security-updates group across 1 directory with 21 updates [#176](https://github.com/jupyter-ai-contrib/jupyter-ai-acp-client/pull/176) ([@dlqqq](https://github.com/dlqqq))
+- Bump the npm-security-updates-ui-tests group across 1 directory with 6 updates [#175](https://github.com/jupyter-ai-contrib/jupyter-ai-acp-client/pull/175) ([@dlqqq](https://github.com/dlqqq))
+- Group Dependabot npm security updates into a single PR [#174](https://github.com/jupyter-ai-contrib/jupyter-ai-acp-client/pull/174) ([@srdas](https://github.com/srdas))
+
+### Contributors to this release
+
+The following people contributed discussions, new ideas, code and documentation contributions, and review.
+See [our definition of contributors](https://github-activity.readthedocs.io/en/latest/use/#how-does-this-tool-define-contributions-in-the-reports).
+
+([GitHub contributors page for this release](https://github.com/jupyter-ai-contrib/jupyter-ai-acp-client/graphs/contributors?from=2026-07-27&to=2026-08-20&type=c))
+
+@bhavana-nair ([activity](https://github.com/search?q=repo%3Ajupyter-ai-contrib%2Fjupyter-ai-acp-client+involves%3Abhavana-nair+updated%3A2026-07-27..2026-08-20&type=Issues)) | @dlqqq ([activity](https://github.com/search?q=repo%3Ajupyter-ai-contrib%2Fjupyter-ai-acp-client+involves%3Adlqqq+updated%3A2026-07-27..2026-08-20&type=Issues)) | @srdas ([activity](https://github.com/search?q=repo%3Ajupyter-ai-contrib%2Fjupyter-ai-acp-client+involves%3Asrdas+updated%3A2026-07-27..2026-08-20&type=Issues))
+
+<!-- <END NEW CHANGELOG ENTRY> -->
+
 ## 0.2.1
 
 ([Full Changelog](https://github.com/jupyter-ai-contrib/jupyter-ai-acp-client/compare/v0.2.0...b1364042d2c1374762a6eae20e53a5c7f5cf4fc7))
@@ -18,8 +48,6 @@ See [our definition of contributors](https://github-activity.readthedocs.io/en/l
 ([GitHub contributors page for this release](https://github.com/jupyter-ai-contrib/jupyter-ai-acp-client/graphs/contributors?from=2026-07-22&to=2026-07-27&type=c))
 
 @dlqqq ([activity](https://github.com/search?q=repo%3Ajupyter-ai-contrib%2Fjupyter-ai-acp-client+involves%3Adlqqq+updated%3A2026-07-22..2026-07-27&type=Issues)) | @srdas ([activity](https://github.com/search?q=repo%3Ajupyter-ai-contrib%2Fjupyter-ai-acp-client+involves%3Asrdas+updated%3A2026-07-22..2026-07-27&type=Issues))
-
-<!-- <END NEW CHANGELOG ENTRY> -->
 
 ## 0.2.0
 
