@@ -5,7 +5,6 @@ import signal
 import sys
 from asyncio import Task
 from asyncio.subprocess import Process
-from dataclasses import asdict
 from typing import Any, ClassVar, Optional
 
 from acp import NewSessionResponse, LoadSessionResponse
@@ -27,7 +26,7 @@ from jupyter_ai_persona_manager import (
     SettingOption,
 )
 from jupyter_ai_persona_manager import Usage as AwarenessUsage
-from jupyterlab_chat.models import Message
+from jupyterlab_chat.models import FileAttachment, Message, NotebookAttachment
 
 from .default_acp_client import JaiAcpClient
 from .telemetry import emit_event, auto_emit_event
@@ -516,7 +515,7 @@ class BaseAcpPersona(BasePersona):
                 prompt = history + "\n\nCurrent user message:\n" + prompt
 
         # Resolve attachments from the chat by ID
-        attachments: list[dict] | None = None
+        attachments: list[FileAttachment | NotebookAttachment] | None = None
         if message.attachments:
             all_attachments = self.chat.get_attachments()
             resolved = []
@@ -525,11 +524,6 @@ class BaseAcpPersona(BasePersona):
                 if raw is None:
                     self.log.warning("Attachment %s not found in chat", aid)
                     continue
-                # Normalize to a plain dict. YChat returns dicts
-                # while WsChatModel returns FileAttachment/NotebookAttachment
-                # dataclasses; downstream code expects dicts.
-                if not isinstance(raw, dict):
-                    raw = asdict(raw)
                 resolved.append(raw)
             attachments = resolved or None
 

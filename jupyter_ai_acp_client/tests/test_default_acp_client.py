@@ -18,7 +18,7 @@ from acp.schema import (
     UsageUpdate,
 )
 
-from jupyterlab_chat.models import User
+from jupyterlab_chat.models import FileAttachment, NotebookAttachment, User
 from jupyterlab_chat.ychat import YChat
 from pycrdt import Awareness
 
@@ -90,7 +90,7 @@ class TestPromptAndReplyContentBlocks:
         await client.prompt_and_reply(
             session_id=SESSION_ID,
             prompt="check this",
-            attachments=[{"value": "src/main.py", "type": "file", "mimetype": "text/x-python"}],
+            attachments=[FileAttachment(value="src/main.py", mimetype="text/x-python")],
             root_dir="/home/user/notebooks",
         )
 
@@ -108,7 +108,7 @@ class TestPromptAndReplyContentBlocks:
         await client.prompt_and_reply(
             session_id=SESSION_ID,
             prompt="review",
-            attachments=[{"value": "analysis.ipynb", "type": "notebook"}],
+            attachments=[NotebookAttachment(value="analysis.ipynb")],
             root_dir="/home/user",
         )
 
@@ -122,7 +122,7 @@ class TestPromptAndReplyContentBlocks:
         await client.prompt_and_reply(
             session_id=SESSION_ID,
             prompt="review",
-            attachments=[{"value": "nb.ipynb", "type": "notebook", "mimetype": "custom/type"}],
+            attachments=[NotebookAttachment(value="nb.ipynb", mimetype="custom/type")],
             root_dir="/home/user",
         )
 
@@ -137,8 +137,8 @@ class TestPromptAndReplyContentBlocks:
             session_id=SESSION_ID,
             prompt="review all",
             attachments=[
-                {"value": "a.py", "type": "file"},
-                {"value": "b.ipynb", "type": "notebook"},
+                FileAttachment(value="a.py"),
+                NotebookAttachment(value="b.ipynb"),
             ],
             root_dir="/tmp",
         )
@@ -183,7 +183,7 @@ class TestPromptAndReplyContentBlocks:
         await client.prompt_and_reply(
             session_id=SESSION_ID,
             prompt="check",
-            attachments=[{"value": "", "type": "file"}],
+            attachments=[FileAttachment(value="")],
         )
 
         blocks = conn.prompt.call_args.kwargs["prompt"]
@@ -196,7 +196,7 @@ class TestPromptAndReplyContentBlocks:
         await client.prompt_and_reply(
             session_id=SESSION_ID,
             prompt="check",
-            attachments=[{"value": "data.csv", "type": "file"}],
+            attachments=[FileAttachment(value="data.csv")],
             root_dir="/tmp",
         )
 
@@ -210,7 +210,7 @@ class TestPromptAndReplyContentBlocks:
         await client.prompt_and_reply(
             session_id=SESSION_ID,
             prompt="check",
-            attachments=[{"value": "subdir/file.py", "type": "file"}],
+            attachments=[FileAttachment(value="subdir/file.py")],
             root_dir=None,
         )
 
@@ -224,7 +224,7 @@ class TestPromptAndReplyContentBlocks:
         await client.prompt_and_reply(
             session_id=SESSION_ID,
             prompt="check",
-            attachments=[{"value": "test.py", "type": "file"}],
+            attachments=[FileAttachment(value="test.py")],
             root_dir="/home/user",
         )
 
@@ -238,7 +238,7 @@ class TestPromptAndReplyContentBlocks:
         await client.prompt_and_reply(
             session_id=SESSION_ID,
             prompt="check",
-            attachments=[{"value": "../../../etc/passwd", "type": "file"}],
+            attachments=[FileAttachment(value="../../../etc/passwd")],
             root_dir="/home/user/notebooks",
         )
 
