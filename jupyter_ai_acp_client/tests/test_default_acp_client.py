@@ -18,11 +18,9 @@ from acp.schema import (
     UsageUpdate,
 )
 
-from jupyterlab_chat.models import User
-from jupyterlab_chat.ychat import YChat
-from pycrdt import Awareness
+from jupyterlab_chat.models import FileAttachment, NotebookAttachment
 
-from jupyter_ai_persona_manager import PersonaAwareness
+from jupyter_ai_persona_manager.persona_events import PersonaSessionState
 
 from jupyter_ai_acp_client.base_acp_persona import BaseAcpPersona
 from jupyter_ai_acp_client.default_acp_client import JaiAcpClient
@@ -31,14 +29,15 @@ from jupyter_ai_acp_client.default_acp_client import JaiAcpClient
 SESSION_ID = "sess-1"
 
 
-def _awareness() -> PersonaAwareness:
-    """A real PersonaAwareness over a fresh in-memory YChat. Constructed outside
-    an event loop, so the heartbeat is skipped — everything else is real."""
-    ychat = YChat()
-    ychat.awareness = Awareness(ydoc=ychat._ydoc)
-    user = User(username="test-persona", name="Test", display_name="Test")
-    return PersonaAwareness(
-        ychat=ychat, log=logging.getLogger("test"), user=user, id="test-persona"
+def _state() -> PersonaSessionState:
+    """A real PersonaSessionState with no event logger, so its typed properties
+    store values in memory without emitting. The report_*/get_* methods
+    round-trip through the real state object."""
+    return PersonaSessionState(
+        event_logger=None,
+        room_id="test-room",
+        persona_id="test-persona",
+        log=logging.getLogger("test"),
     )
 
 
@@ -57,9 +56,9 @@ def _make_client_and_persona():
     # Mock persona
     persona = MagicMock()
     persona.log = MagicMock()
-    persona.awareness = MagicMock()
-    persona.ychat = MagicMock()
-    persona.ychat.get_message.return_value = None
+    persona.state = MagicMock()
+    persona.chat = MagicMock()
+    persona.chat.get_message.return_value = None
 
     # Mock tool call manager
     client._tool_call_manager = MagicMock()
@@ -90,7 +89,7 @@ class TestPromptAndReplyContentBlocks:
         await client.prompt_and_reply(
             session_id=SESSION_ID,
             prompt="check this",
-            attachments=[{"value": "src/main.py", "type": "file", "mimetype": "text/x-python"}],
+            attachments=[FileAttachment(value="src/main.py", mimetype="text/x-python")],
             root_dir="/home/user/notebooks",
         )
 
@@ -108,7 +107,7 @@ class TestPromptAndReplyContentBlocks:
         await client.prompt_and_reply(
             session_id=SESSION_ID,
             prompt="review",
-            attachments=[{"value": "analysis.ipynb", "type": "notebook"}],
+            attachments=[NotebookAttachment(value="analysis.ipynb")],
             root_dir="/home/user",
         )
 
@@ -122,7 +121,7 @@ class TestPromptAndReplyContentBlocks:
         await client.prompt_and_reply(
             session_id=SESSION_ID,
             prompt="review",
-            attachments=[{"value": "nb.ipynb", "type": "notebook", "mimetype": "custom/type"}],
+            attachments=[NotebookAttachment(value="nb.ipynb", mimetype="custom/type")],
             root_dir="/home/user",
         )
 
@@ -137,8 +136,8 @@ class TestPromptAndReplyContentBlocks:
             session_id=SESSION_ID,
             prompt="review all",
             attachments=[
-                {"value": "a.py", "type": "file"},
-                {"value": "b.ipynb", "type": "notebook"},
+                FileAttachment(value="a.py"),
+                NotebookAttachment(value="b.ipynb"),
             ],
             root_dir="/tmp",
         )
@@ -183,7 +182,7 @@ class TestPromptAndReplyContentBlocks:
         await client.prompt_and_reply(
             session_id=SESSION_ID,
             prompt="check",
-            attachments=[{"value": "", "type": "file"}],
+            attachments=[FileAttachment(value="")],
         )
 
         blocks = conn.prompt.call_args.kwargs["prompt"]
@@ -196,7 +195,7 @@ class TestPromptAndReplyContentBlocks:
         await client.prompt_and_reply(
             session_id=SESSION_ID,
             prompt="check",
-            attachments=[{"value": "data.csv", "type": "file"}],
+            attachments=[FileAttachment(value="data.csv")],
             root_dir="/tmp",
         )
 
@@ -210,7 +209,7 @@ class TestPromptAndReplyContentBlocks:
         await client.prompt_and_reply(
             session_id=SESSION_ID,
             prompt="check",
-            attachments=[{"value": "subdir/file.py", "type": "file"}],
+            attachments=[FileAttachment(value="subdir/file.py")],
             root_dir=None,
         )
 
@@ -224,7 +223,7 @@ class TestPromptAndReplyContentBlocks:
         await client.prompt_and_reply(
             session_id=SESSION_ID,
             prompt="check",
-            attachments=[{"value": "test.py", "type": "file"}],
+            attachments=[FileAttachment(value="test.py")],
             root_dir="/home/user",
         )
 
@@ -238,7 +237,7 @@ class TestPromptAndReplyContentBlocks:
         await client.prompt_and_reply(
             session_id=SESSION_ID,
             prompt="check",
-            attachments=[{"value": "../../../etc/passwd", "type": "file"}],
+            attachments=[FileAttachment(value="../../../etc/passwd")],
             root_dir="/home/user/notebooks",
         )
 
@@ -262,10 +261,13 @@ def _real_usage_persona():
     persona._acp_context_usage = None
     persona._acp_session_usage = None
     persona.log = logging.getLogger("test")
-    # A real awareness slot so `_sync_awareness_usage` -> `report_usage`
+    # A real state slot so `_sync_awareness_usage` -> `report_usage`
     # round-trips through the real typed properties.
-    persona.awareness = _awareness()
-    persona.ychat = MagicMock()
+    persona.state = _state()
+    persona.chat = MagicMock()
+    # `set_writing_status()` (called incidentally by `prompt_and_reply`) builds
+    # `as_user()`, which reads `self.defaults`; this persona has none, so mock it.
+    persona.as_user = MagicMock()
     return persona
 
 

@@ -34,7 +34,7 @@ def _make_persona(attachments_map: dict | None = None):
     ychat.get_attachments.return_value = attachments_map or {}
     ychat.get_messages.return_value = []
     ychat.get_users.return_value = {}
-    persona.ychat = ychat
+    persona.chat = ychat
 
     # parent.root_dir
     persona.parent = MagicMock()
@@ -285,8 +285,8 @@ class TestLoadSessionRecovery:
             _make_chat_message("msg-2", "hi there", "bot-1"),
             _make_chat_message("msg-3", "follow up", "user-1"),  # current message
         ]
-        persona.ychat.get_messages.return_value = msgs
-        persona.ychat.get_users.return_value = {}
+        persona.chat.get_messages.return_value = msgs
+        persona.chat.get_users.return_value = {}
 
         result = BaseAcpPersona._build_history_context(persona, exclude_id="msg-3")
 
@@ -300,10 +300,10 @@ class TestLoadSessionRecovery:
         persona = _make_persona()
         persona._pending_session_recovery_context = True
         persona._MAX_HISTORY_MESSAGES = BaseAcpPersona._MAX_HISTORY_MESSAGES
-        persona.ychat.get_messages.return_value = [
+        persona.chat.get_messages.return_value = [
             _make_chat_message("msg-1", "hello world", "user-1"),
         ]
-        persona.ychat.get_users.return_value = {}
+        persona.chat.get_users.return_value = {}
         persona.get_client.return_value = client
         # Delegate to the real method so history is built from ychat
         persona._build_history_context = (
@@ -327,8 +327,8 @@ class TestLoadSessionRecovery:
             _make_chat_message(f"msg-{i}", f"message {i}", "user-1")
             for i in range(cap + 10)
         ]
-        persona.ychat.get_messages.return_value = msgs
-        persona.ychat.get_users.return_value = {}
+        persona.chat.get_messages.return_value = msgs
+        persona.chat.get_users.return_value = {}
 
         result = BaseAcpPersona._build_history_context(persona)
 
@@ -376,12 +376,12 @@ class TestResumeAfterAuth:
         persona.get_client.return_value = client
         # Simulate chat history: the user's original request is already in ychat,
         # along with the new message that triggered process_message()
-        persona.ychat.get_messages.return_value = [
+        persona.chat.get_messages.return_value = [
             _make_chat_message("msg-1", "@Kiro generate a fibonacci file", "user-1"),
             _make_chat_message("msg-2", "You're not signed in.", "bot-1"),
             _make_chat_message("msg-3", "@Kiro hello again", "user-1"),
         ]
-        persona.ychat.get_users.return_value = {}
+        persona.chat.get_users.return_value = {}
         persona._build_history_context = (
             lambda **kw: BaseAcpPersona._build_history_context(persona, **kw)
         )

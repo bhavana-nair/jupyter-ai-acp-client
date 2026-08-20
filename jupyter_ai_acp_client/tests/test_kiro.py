@@ -24,11 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from acp.exceptions import RequestError
 from acp.schema import LoadSessionResponse, NewSessionResponse
-from jupyterlab_chat.models import User
-from jupyterlab_chat.ychat import YChat
-from pycrdt import Awareness
-
-from jupyter_ai_persona_manager import PersonaAwareness
+from jupyter_ai_persona_manager.persona_events import PersonaSessionState
 
 # `kiro.py` runs a `kiro-cli` install/version guard at import time, which raises
 # where kiro-cli isn't installed (e.g. CI). Satisfy the guard with mocks so the
@@ -69,14 +65,15 @@ MODELS = {
 }
 
 
-def _awareness(persona_id: str = "test-persona") -> PersonaAwareness:
-    """A real PersonaAwareness over a fresh in-memory YChat. Constructed outside
-    an event loop, so the heartbeat is skipped — everything else is real."""
-    ychat = YChat()
-    ychat.awareness = Awareness(ydoc=ychat._ydoc)
-    user = User(username=persona_id, name="Test", display_name="Test")
-    return PersonaAwareness(
-        ychat=ychat, log=logging.getLogger("test"), user=user, id=persona_id
+def _state(persona_id: str = "test-persona") -> PersonaSessionState:
+    """A real PersonaSessionState with no event logger, so its typed properties
+    store values in memory without emitting. The report_*/get_* methods
+    round-trip through the real state object."""
+    return PersonaSessionState(
+        event_logger=None,
+        room_id="test-room",
+        persona_id=persona_id,
+        log=logging.getLogger("test"),
     )
 
 
@@ -88,8 +85,8 @@ def _kiro_persona(persona_id: str = "test-persona") -> KiroAcpPersona:
     """
     persona = KiroAcpPersona.__new__(KiroAcpPersona)
     persona.log = logging.getLogger("test")
-    persona.awareness = _awareness(persona_id)
-    persona.ychat = MagicMock()
+    persona.state = _state(persona_id)
+    persona.chat = MagicMock()
     persona._acp_modes = []
     persona._acp_current_mode_id = None
     persona._acp_config_options = []
