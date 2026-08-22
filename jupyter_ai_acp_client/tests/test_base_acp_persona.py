@@ -1,5 +1,6 @@
 """Tests for attachment resolution and load-session recovery in BaseAcpPersona."""
 
+import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock
 
@@ -21,6 +22,7 @@ def _make_persona(attachments_map: dict | None = None):
     persona.get_client = AsyncMock()
     persona.get_session_id = AsyncMock(return_value="sess-1")
     persona.is_authed = AsyncMock(return_value=True)
+    persona.prepare = AsyncMock()
     persona._pending_session_recovery_context = False
     persona._was_initially_unauthenticated = False
 
@@ -504,3 +506,314 @@ class TestHandleUncaughtException:
         if persona.send_message.called:
             body = persona.send_message.call_args[0][0]
             assert "**Error code:**" not in body
+
+
+def _make_lazy_persona(persona_cls=None, subprocess_impl=None):
+    """
+    Build a BaseAcpPersona subclass instance without running the heavy
+    BasePersona.__init__, wired just enough to exercise `prepare()`, the
+    non-spawning `_client_started` probe, and the shutdown guard.
+
+    By default each call defines a fresh subclass so class-level futures don't
+    leak between tests. Pass `persona_cls` to build a second instance that
+    shares one class's futures (for concurrency tests). Pass `subprocess_impl`
+    to inject a counting/failing agent-subprocess stub. Nothing real is spawned.
+    """
+
+    if persona_cls is None:
+        class _LazyTestPersona(BaseAcpPersona):
+            # Shadow the read-only BasePersona properties so the test can inject
+            # them without running the real constructor.
+            event_loop = None
+            event_logger = None
+
+            @property
+            def defaults(self):
+                return MagicMock()
+
+        persona_cls = _LazyTestPersona
+
+    persona = persona_cls.__new__(persona_cls)
+    persona.event_loop = asyncio.get_event_loop()
+    persona.log = logging.getLogger("lazy-test-persona")
+    persona._client_session_future = None
+    persona._prepare_task = None
+    persona._engagement_emitted = False
+    persona.event_logger = MagicMock()
+
+    async def _fake_subprocess():
+        return "subprocess"
+
+    async def _fake_client():
+        return "client"
+
+    async def _fake_session():
+        return "session"
+
+    persona._init_agent_subprocess = subprocess_impl or _fake_subprocess
+    persona._init_client = _fake_client
+    persona._init_client_session = _fake_session
+    return persona_cls, persona
+
+
+class TestPrepareLifecycle:
+    """
+    Deferred-spawn behavior for issue #172: construction spawns nothing; the
+    `prepare()` hook performs the startup once, before the first message.
+    """
+
+    async def test_construction_creates_no_futures(self):
+        """A freshly constructed persona has spawned nothing."""
+        cls, persona = _make_lazy_persona()
+        assert "_subprocess_future" not in cls.__dict__
+        assert "_client_future" not in cls.__dict__
+        assert persona._client_session_future is None
+        assert persona._client_started() is False
+
+    async def test_prepare_starts_subprocess_client_and_session(self):
+        """prepare() creates the subprocess, client, and session futures."""
+        cls, persona = _make_lazy_persona()
+        assert persona._client_started() is False
+
+        await persona.prepare()
+
+        assert cls._subprocess_future is not None
+        assert cls._client_future is not None
+        assert persona._client_session_future is not None
+        assert persona._client_started() is True
+        # The futures resolve to the stubbed startup results.
+        assert await persona.get_agent_subprocess() == "subprocess"
+        assert await persona.get_client() == "client"
+        assert await persona.get_session_response() == "session"
+
+    async def test_prepare_is_idempotent(self):
+        """Calling prepare() twice does not recreate the futures or re-emit."""
+        cls, persona = _make_lazy_persona()
+
+        await persona.prepare()
+        subprocess_future = cls._subprocess_future
+        client_future = cls._client_future
+        session_future = persona._client_session_future
+
+        await persona.prepare()
+
+        assert cls._subprocess_future is subprocess_future
+        assert cls._client_future is client_future
+        assert persona._client_session_future is session_future
+        ops = [
+            c.kwargs.get("data", {}).get("operation")
+            for c in persona.event_logger.emit.call_args_list
+        ]
+        assert ops.count("acp_engagement") == 1
+
+    async def test_prepare_emits_engagement(self):
+        """prepare() emits the 'tried' engagement funnel event."""
+        cls, persona = _make_lazy_persona()
+
+        await persona.prepare()
+
+        ops = [
+            c.kwargs.get("data", {}).get("operation")
+            for c in persona.event_logger.emit.call_args_list
+        ]
+        assert "acp_engagement" in ops
+
+    async def test_shutdown_of_unengaged_persona_does_not_spawn(self):
+        """
+        Shutting down a persona that was never engaged must not spawn it.
+        `_shutdown` must not call get_client()/get_agent_subprocess() in this
+        path, and must reset the class futures.
+        """
+        cls, persona = _make_lazy_persona()
+        cls._before_subprocess_future = None
+        persona.get_client = AsyncMock()
+        persona.get_agent_subprocess = AsyncMock()
+        persona.get_session_id = AsyncMock()
+
+        await persona._shutdown()
+
+        persona.get_client.assert_not_awaited()
+        persona.get_agent_subprocess.assert_not_awaited()
+        persona.get_session_id.assert_not_awaited()
+        assert cls._client_future is None
+        assert cls._subprocess_future is None
+
+
+class TestPrepareConcurrencyAndRetry:
+    """
+    Hardening for prepare(): idempotent under concurrency, exactly one shared
+    subprocess across instances of the same class, exception propagation, and
+    retry after a failed startup.
+    """
+
+    async def test_concurrent_prepare_spawns_one_subprocess(self):
+        """Many concurrent prepare() calls on one instance = one subprocess,
+        one engagement event."""
+        calls = []
+
+        async def counting_subprocess():
+            calls.append(1)
+            return "subprocess"
+
+        cls, persona = _make_lazy_persona(subprocess_impl=counting_subprocess)
+
+        await asyncio.gather(*[persona.prepare() for _ in range(5)])
+        # Let the (single) subprocess task actually run.
+        await persona.get_agent_subprocess()
+
+        assert sum(calls) == 1
+        ops = [
+            c.kwargs.get("data", {}).get("operation")
+            for c in persona.event_logger.emit.call_args_list
+        ]
+        assert ops.count("acp_engagement") == 1
+
+    async def test_two_instances_same_class_share_one_subprocess(self):
+        """Two personas of the same class preparing at once spawn exactly one
+        shared agent subprocess."""
+        calls = []
+
+        async def counting_subprocess():
+            calls.append(1)
+            return "subprocess"
+
+        cls, p1 = _make_lazy_persona(subprocess_impl=counting_subprocess)
+        _, p2 = _make_lazy_persona(persona_cls=cls, subprocess_impl=counting_subprocess)
+
+        await asyncio.gather(p1.prepare(), p2.prepare())
+        # Both instances resolve the same shared subprocess.
+        s1 = await p1.get_agent_subprocess()
+        s2 = await p2.get_agent_subprocess()
+
+        assert sum(calls) == 1
+        assert s1 == s2 == "subprocess"
+        assert p1.__class__._subprocess_future is p2.__class__._subprocess_future
+
+    async def test_failed_startup_is_retried_on_next_prepare(self):
+        """A subprocess that failed is discarded and retried on the next
+        prepare()."""
+        state = {"fail": True, "calls": 0}
+
+        async def flaky_subprocess():
+            state["calls"] += 1
+            if state["fail"]:
+                raise RuntimeError("spawn boom")
+            return "subprocess"
+
+        cls, persona = _make_lazy_persona(subprocess_impl=flaky_subprocess)
+
+        # First attempt fails; the failure surfaces when the subprocess is awaited.
+        await persona.prepare()
+        with pytest.raises(RuntimeError, match="spawn boom"):
+            await persona.get_agent_subprocess()
+
+        # Clear the fault and prepare again: the failed task is discarded and recreated.
+        state["fail"] = False
+        await persona.prepare()
+        assert await persona.get_agent_subprocess() == "subprocess"
+        assert state["calls"] == 2  # retried, not cached-failed
+
+    async def test_cancelled_startup_is_discarded_on_next_prepare(self):
+        """A cancelled startup task is discarded and recreated on the next
+        prepare() (a cancelled future is a not-succeeded future)."""
+        cls, persona = _make_lazy_persona()
+        await persona.prepare()
+
+        # Cancel the shared subprocess task and let the cancellation settle.
+        cls._subprocess_future.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cls._subprocess_future
+
+        # Next prepare() must drop the cancelled task and create a live one.
+        await persona.prepare()
+        assert await persona.get_agent_subprocess() == "subprocess"
+
+    async def test_engagement_re_emits_only_after_reset(self):
+        """A successful prepare() emits engagement once even across retries of a
+        failed startup (engagement is per-instance, emitted on first call)."""
+        cls, persona = _make_lazy_persona()
+        await persona.prepare()
+        await persona.prepare()
+        ops = [
+            c.kwargs.get("data", {}).get("operation")
+            for c in persona.event_logger.emit.call_args_list
+        ]
+        assert ops.count("acp_engagement") == 1
+
+
+class TestProcessMessagePropagatesStartupFailure:
+    """A startup failure reaches process_message so the manager can show it."""
+
+    async def test_get_client_failure_propagates(self):
+        persona = _make_persona()  # persona.prepare is an AsyncMock no-op
+        persona.get_client = AsyncMock(side_effect=RuntimeError("client boom"))
+
+        with pytest.raises(RuntimeError, match="client boom"):
+            await BaseAcpPersona.process_message(persona, _make_message("@bot hi"))
+
+
+class TestFunnelEvents:
+    """Telemetry funnel: requirements_met (construction) -> engagement (prepare)
+    -> login + usage (process_message)."""
+
+    def test_requirements_met_emitted_on_construction(self, monkeypatch):
+        import jupyter_ai_acp_client.base_acp_persona as mod
+
+        emitted = []
+        monkeypatch.setattr(
+            mod,
+            "emit_event",
+            lambda logger, op, outcome, details=None: emitted.append(op),
+        )
+        # Stub the heavy BasePersona.__init__ so we can exercise BaseAcpPersona's.
+        monkeypatch.setattr(mod.BasePersona, "__init__", lambda self, *a, **k: None)
+
+        class _P(BaseAcpPersona):
+            event_loop = None
+            event_logger = None
+
+            @property
+            def defaults(self):
+                return MagicMock()
+
+        p = _P.__new__(_P)
+        BaseAcpPersona.__init__(p, executable=["x"])
+
+        assert "acp_requirements_met" in emitted
+
+    async def test_login_and_success_emitted_on_successful_message(self):
+        client = _make_client()
+        persona = _make_persona()
+        persona.get_client.return_value = client
+        persona.event_logger = MagicMock()
+        persona._login_emitted = False
+        persona._success_emitted = False
+
+        await BaseAcpPersona.process_message(persona, _make_message("@bot hi"))
+
+        ops = [
+            c.kwargs.get("data", {}).get("operation")
+            for c in persona.event_logger.emit.call_args_list
+        ]
+        assert "acp_login" in ops
+        assert "acp_success" in ops
+
+    async def test_no_login_or_success_when_unauthenticated(self):
+        persona = _make_persona()
+        persona.is_authed = AsyncMock(return_value=False)
+        persona.handle_no_auth = AsyncMock()
+        persona.event_logger = MagicMock()
+        persona._login_emitted = False
+        persona._success_emitted = False
+
+        await BaseAcpPersona.process_message(persona, _make_message("@bot hi"))
+
+        ops = [
+            c.kwargs.get("data", {}).get("operation")
+            for c in persona.event_logger.emit.call_args_list
+        ]
+        assert "acp_login" not in ops
+        assert "acp_success" not in ops
+
+
+

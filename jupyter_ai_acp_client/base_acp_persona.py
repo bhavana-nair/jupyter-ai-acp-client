@@ -162,40 +162,26 @@ class BaseAcpPersona(BasePersona):
         self._executable = executable
         self._pending_session_recovery_context: bool = False
         self._was_initially_unauthenticated: bool = False
-
-        # Ensure each subclass has its own subprocess and client by checking if the
-        # class variable is defined directly on this class (not inherited)
-        if (
-            "_before_subprocess_future" not in self.__class__.__dict__
-            or self.__class__._before_subprocess_future is None
-        ):
-            self.__class__._before_subprocess_future = self.event_loop.create_task(
-                self.before_agent_subprocess()
-            )
-        if (
-            "_subprocess_future" not in self.__class__.__dict__
-            or self.__class__._subprocess_future is None
-        ):
-            self.__class__._subprocess_future = self.event_loop.create_task(
-                self._init_agent_subprocess()
-            )
-        if (
-            "_client_future" not in self.__class__.__dict__
-            or self.__class__._client_future is None
-        ):
-            self.__class__._client_future = self.event_loop.create_task(
-                self._init_client()
-            )
-
-        self._client_session_future = self.event_loop.create_task(
-            self._init_client_session()
-        )
+        self._engagement_emitted: bool = False
+        self._login_emitted: bool = False
+        self._success_emitted: bool = False
+        self._client_session_future: Task[
+            NewSessionResponse | LoadSessionResponse
+        ] | None = None
         self._acp_slash_commands = []
         self._acp_modes = []
         self._acp_current_mode_id = None
         self._acp_config_options = []
         self._acp_context_usage = None
         self._acp_session_usage = None
+
+        # Agent's requirements are met
+        emit_event(
+            self.event_logger,
+            "acp_requirements_met",
+            "success",
+            {"persona_class": self.__class__.__name__},
+        )
 
     async def before_agent_subprocess(self) -> None:
         """
@@ -392,22 +378,97 @@ class BaseAcpPersona(BasePersona):
             root_dir=self.parent.root_dir,
         )
 
+    def _client_started(self) -> bool:
+        """
+        Whether `prepare()` has created the client task.
+        Does not create it, so callers can probe without spawning.
+        """
+        cls = self.__class__
+        return "_client_future" in cls.__dict__ and cls._client_future is not None
+
+    async def prepare(self) -> None:
+        """
+        ACP startup: spawn the shared agent subprocess/client and create this
+        chat's session. The manager runs this once via `BasePersona`, which
+        also handles awaiting an in-flight run for concurrent messages and
+        retrying a failed one — so this just does the work.
+
+        The startup tasks are kicked off but not awaited to readiness, so an
+        auth-gated persona (e.g. Kiro) is not blocked before its login prompt.
+        A class-level startup task that previously failed (e.g. a subprocess
+        spawn error) is discarded here so a fresh persona instance recreates it.
+        """
+        # Reset class-level startup tasks that failed so the checks below.
+        self._discard_failed_startup()
+
+        # Emit 'engagement' once per persona instance.
+        if not self._engagement_emitted:
+            self._engagement_emitted = True
+            emit_event(
+                self.event_logger,
+                "acp_engagement",
+                "success",
+                {"persona_class": self.__class__.__name__},
+            )
+
+        cls = self.__class__
+        if (
+            "_before_subprocess_future" not in cls.__dict__
+            or cls._before_subprocess_future is None
+        ):
+            cls._before_subprocess_future = self.event_loop.create_task(
+                self.before_agent_subprocess()
+            )
+        if "_subprocess_future" not in cls.__dict__ or cls._subprocess_future is None:
+            cls._subprocess_future = self.event_loop.create_task(
+                self._init_agent_subprocess()
+            )
+        if "_client_future" not in cls.__dict__ or cls._client_future is None:
+            cls._client_future = self.event_loop.create_task(self._init_client())
+        if self._client_session_future is None:
+            self._client_session_future = self.event_loop.create_task(
+                self._init_client_session()
+            )
+
+    def _discard_failed_startup(self) -> None:
+        """
+        Drop the shared (class-level) startup tasks that completed with an
+        exception so `prepare()` recreates them. Tasks still running or
+        completed successfully are left untouched. This is what lets a fresh
+        persona instance recover a subprocess/client that failed to start.
+        """
+        cls = self.__class__
+        for name in (
+            "_before_subprocess_future",
+            "_subprocess_future",
+            "_client_future",
+        ):
+            if self._is_discardable(cls.__dict__.get(name)):
+                setattr(cls, name, None)
+        if self._is_discardable(self._client_session_future):
+            self._client_session_future = None
+
+    @staticmethod
+    def _is_discardable(fut: object) -> bool:
+        """A startup task that ended without success — cancelled or raised — so
+        `prepare()` should recreate it. `.exception()` is guarded by the
+        short-circuit since it raises on a cancelled task."""
+        return (
+            isinstance(fut, Task)
+            and fut.done()
+            and (fut.cancelled() or fut.exception() is not None)
+        )
+
     async def get_agent_subprocess(self) -> asyncio.subprocess.Process:
-        """
-        Safely returns the ACP agent subprocess for this persona.
-        """
+        """Safely returns the ACP agent subprocess (spawned by `prepare()`)."""
         return await self.__class__._subprocess_future
 
     async def get_client(self) -> JaiAcpClient:
-        """
-        Safely returns the ACP client for this persona.
-        """
+        """Safely returns the ACP client (initialized by `prepare()`)."""
         return await self.__class__._client_future
 
     async def get_session_response(self) -> NewSessionResponse | LoadSessionResponse:
-        """
-        Safely returns the ACP session response for this chat.
-        """
+        """Safely returns the ACP session response (created by `prepare()`)."""
         return await self._client_session_future
 
     async def get_session_id(self) -> str:
@@ -489,6 +550,16 @@ class BaseAcpPersona(BasePersona):
             await self.handle_no_auth(message)
             return
 
+        # User is authenticated for this persona.
+        if not self._login_emitted:
+            self._login_emitted = True
+            emit_event(
+                self.event_logger,
+                "acp_login",
+                "success",
+                {"persona_class": self.__class__.__name__},
+            )
+
         # If the user was previously unauthenticated, proactively resume their
         # original request instead of processing this message normally.
         if self._was_initially_unauthenticated:
@@ -534,6 +605,15 @@ class BaseAcpPersona(BasePersona):
             root_dir=self.parent.root_dir,
         )
 
+        if not self._success_emitted:
+            self._success_emitted = True
+            emit_event(
+                self.event_logger,
+                "acp_success",
+                "success",
+                {"persona_class": self.__class__.__name__},
+            )
+
     async def cancel_response(self) -> None:
         """
         Interrupt this persona's in-progress ACP turn.
@@ -548,6 +628,9 @@ class BaseAcpPersona(BasePersona):
         ongoing prompt turn — always has a turn to cancel. A not-yet-initialized
         session is still ignored defensively.
         """
+        # Nothing to cancel if the persona was never prepared (no session yet).
+        if self._client_session_future is None:
+            return
         try:
             session_id = await self.get_session_id()
         except (AssertionError, KeyError):
@@ -1008,6 +1091,23 @@ class BaseAcpPersona(BasePersona):
     async def _shutdown(self):
         self.log.info("[shutdown] Starting for '%s'.", self.__class__.__name__)
 
+        if not self._client_started():
+            before_future = self.__class__._before_subprocess_future
+            if isinstance(before_future, Task) and not before_future.done():
+                before_future.cancel()
+            if isinstance(self._client_session_future, Task) and not (
+                self._client_session_future.done()
+            ):
+                self._client_session_future.cancel()
+            self.__class__._before_subprocess_future = None
+            self.__class__._subprocess_future = None
+            self.__class__._client_future = None
+            self.log.info(
+                "[shutdown] Persona '%s' was never engaged; nothing to tear down.",
+                self.__class__.__name__,
+            )
+            return
+
         # Cancel any pending startup futures to avoid hanging on auth-gated
         # personas (e.g. Kiro) that never finished startup.
         for future in [
@@ -1022,12 +1122,14 @@ class BaseAcpPersona(BasePersona):
         # Step 1: Session cleanup
         try:
             client = await self.get_client()
-            session_id = await self.get_session_id()
-            await client.end_session(session_id)
-            self.log.info(
-                "[shutdown] Step 1: session ended for '%s'.",
-                self.__class__.__name__,
-            )
+            # Only end a session that exists.
+            if self._client_session_future is not None:
+                session_id = await self.get_session_id()
+                await client.end_session(session_id)
+                self.log.info(
+                    "[shutdown] Step 1: session ended for '%s'.",
+                    self.__class__.__name__,
+                )
         except asyncio.CancelledError:
             pass
         except Exception:
