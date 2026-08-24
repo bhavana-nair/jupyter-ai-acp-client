@@ -64,6 +64,12 @@ def _flatten_select_options(options) -> list:
     return flat
 
 
+class _NotAuthenticated(Exception):
+    """Raised by `prepare()` when the user is not signed in, so the manager
+    re-runs `prepare()` on the next message. `handle_uncaught_exception` turns
+    it into a login prompt instead of a generic error."""
+
+
 class BaseAcpPersona(BasePersona):
     _before_subprocess_future: ClassVar[Task[None] | None] = None
     """
@@ -162,9 +168,7 @@ class BaseAcpPersona(BasePersona):
         self._executable = executable
         self._pending_session_recovery_context: bool = False
         self._was_initially_unauthenticated: bool = False
-        self._engagement_emitted: bool = False
-        self._login_emitted: bool = False
-        self._success_emitted: bool = False
+        self._emitted: set[str] = set()
         self._client_session_future: Task[
             NewSessionResponse | LoadSessionResponse
         ] | None = None
@@ -175,13 +179,23 @@ class BaseAcpPersona(BasePersona):
         self._acp_context_usage = None
         self._acp_session_usage = None
 
-        # Agent's requirements are met
+        self.emit_once("acp_requirements_met")
+
+    def emit(self, operation: str, outcome: str = "success") -> None:
+        """Emit a funnel event."""
         emit_event(
             self.event_logger,
-            "acp_requirements_met",
-            "success",
+            operation,
+            outcome,
             {"persona_class": self.__class__.__name__},
         )
+
+    def emit_once(self, operation: str, outcome: str = "success") -> None:
+        """Emit a funnel event at most once per persona instance."""
+        if operation in self._emitted:
+            return
+        self._emitted.add(operation)
+        self.emit(operation, outcome)
 
     async def before_agent_subprocess(self) -> None:
         """
@@ -388,28 +402,27 @@ class BaseAcpPersona(BasePersona):
 
     async def prepare(self) -> None:
         """
-        ACP startup: spawn the shared agent subprocess/client and create this
-        chat's session. The manager runs this once via `BasePersona`, which
-        also handles awaiting an in-flight run for concurrent messages and
-        retrying a failed one — so this just does the work.
+        ACP startup: gate on auth, then spawn the shared agent subprocess/client
+        and create this chat's session. The manager runs this once via
+        `BasePersona`, awaiting an in-flight run for concurrent messages and
+        re-running it after a failed one.
 
-        The startup tasks are kicked off but not awaited to readiness, so an
-        auth-gated persona (e.g. Kiro) is not blocked before its login prompt.
-        A class-level startup task that previously failed (e.g. a subprocess
-        spawn error) is discarded here so a fresh persona instance recreates it.
+        If the user is not authenticated, raise `_NotAuthenticated` so the
+        manager re-runs this on the next message (retrying login each time). The
+        login prompt is shown from `handle_uncaught_exception`. A class-level
+        startup task that previously failed is discarded here so a fresh persona
+        instance recreates it.
         """
         # Reset class-level startup tasks that failed so the checks below.
         self._discard_failed_startup()
 
-        # Emit 'engagement' once per persona instance.
-        if not self._engagement_emitted:
-            self._engagement_emitted = True
-            emit_event(
-                self.event_logger,
-                "acp_engagement",
-                "success",
-                {"persona_class": self.__class__.__name__},
-            )
+        self.emit_once("acp_engagement")
+
+        if not await self.is_authed():
+            self.emit("acp_login", "failure")
+            raise _NotAuthenticated()
+
+        self.emit_once("acp_login")
 
         cls = self.__class__
         if (
@@ -429,6 +442,18 @@ class BaseAcpPersona(BasePersona):
             self._client_session_future = self.event_loop.create_task(
                 self._init_client_session()
             )
+
+        # Await startup to readiness so success/failure reflects the real
+        # outcome. 
+        try:
+            await self.get_agent_subprocess()
+            await self.get_client()
+            await self.get_session_response()
+        except Exception:
+            self.emit("acp_success", "failure")
+            raise
+
+        self.emit_once("acp_success")
 
     def _discard_failed_startup(self) -> None:
         """
@@ -489,20 +514,24 @@ class BaseAcpPersona(BasePersona):
         """
         return True
 
-    async def handle_no_auth(self, message: Message) -> None:
+    async def handle_no_auth(self, message: Message | None = None) -> None:
         """
-        Method called when the persona receives a message while the user is not
-        authenticated. Sets the `_was_initially_unauthenticated` flag so the
-        agent can proactively resume the user's request after signing in.
-
-        Subclasses should call `await super().handle_no_auth(message)` first,
-        then send a custom message asking the user to log in and perform any
-        additional setup (e.g. opening a login terminal).
+        Ask the user to sign in. Sets `_was_initially_unauthenticated` so the
+        agent can resume the request after sign-in. Subclasses override to send
+        the sign-in instructions and open a login terminal.
         """
         self._was_initially_unauthenticated = True
         self.log.warning(
             "[%s] Received message while unauthenticated.", self.__class__.__name__
         )
+
+    async def handle_uncaught_exception(self, exc: Exception) -> None:
+        """Show the login prompt for an auth failure from `prepare()`; otherwise
+        fall back to the default error handling."""
+        if isinstance(exc, _NotAuthenticated):
+            await self.handle_no_auth(None)
+            return
+        await super().handle_uncaught_exception(exc)
 
     def _build_history_context(
         self,
@@ -545,21 +574,7 @@ class BaseAcpPersona(BasePersona):
 
         This method may be overriden by child classes.
         """
-        # If not authenticated, return early
-        if not await self.is_authed():
-            await self.handle_no_auth(message)
-            return
-
-        # User is authenticated for this persona.
-        if not self._login_emitted:
-            self._login_emitted = True
-            emit_event(
-                self.event_logger,
-                "acp_login",
-                "success",
-                {"persona_class": self.__class__.__name__},
-            )
-
+        # Auth is gated in prepare(); reaching here means the user is signed in.
         # If the user was previously unauthenticated, proactively resume their
         # original request instead of processing this message normally.
         if self._was_initially_unauthenticated:
@@ -604,15 +619,6 @@ class BaseAcpPersona(BasePersona):
             attachments=attachments,
             root_dir=self.parent.root_dir,
         )
-
-        if not self._success_emitted:
-            self._success_emitted = True
-            emit_event(
-                self.event_logger,
-                "acp_success",
-                "success",
-                {"persona_class": self.__class__.__name__},
-            )
 
     async def cancel_response(self) -> None:
         """

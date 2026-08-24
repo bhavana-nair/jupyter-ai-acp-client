@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from jupyterlab_chat.models import Message
 
-from jupyter_ai_acp_client.base_acp_persona import BaseAcpPersona
+from jupyter_ai_acp_client.base_acp_persona import BaseAcpPersona, _NotAuthenticated
 
 
 def _make_chat_message(
@@ -538,7 +538,8 @@ def _make_lazy_persona(persona_cls=None, subprocess_impl=None):
     persona.log = logging.getLogger("lazy-test-persona")
     persona._client_session_future = None
     persona._prepare_task = None
-    persona._engagement_emitted = False
+    persona._emitted = set()
+    persona.is_authed = AsyncMock(return_value=True)
     persona.event_logger = MagicMock()
 
     async def _fake_subprocess():
@@ -702,10 +703,9 @@ class TestPrepareConcurrencyAndRetry:
 
         cls, persona = _make_lazy_persona(subprocess_impl=flaky_subprocess)
 
-        # First attempt fails; the failure surfaces when the subprocess is awaited.
-        await persona.prepare()
+        # prepare() awaits startup, so the spawn failure propagates out of it.
         with pytest.raises(RuntimeError, match="spawn boom"):
-            await persona.get_agent_subprocess()
+            await persona.prepare()
 
         # Clear the fault and prepare again: the failed task is discarded and recreated.
         state["fail"] = False
@@ -717,14 +717,18 @@ class TestPrepareConcurrencyAndRetry:
         """A cancelled startup task is discarded and recreated on the next
         prepare() (a cancelled future is a not-succeeded future)."""
         cls, persona = _make_lazy_persona()
-        await persona.prepare()
 
-        # Cancel the shared subprocess task and let the cancellation settle.
-        cls._subprocess_future.cancel()
+        # Seed a previously-cancelled shared subprocess task on the class.
+        async def _never():
+            await asyncio.sleep(3600)
+
+        stuck = persona.event_loop.create_task(_never())
+        stuck.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await cls._subprocess_future
+            await stuck
+        cls._subprocess_future = stuck
 
-        # Next prepare() must drop the cancelled task and create a live one.
+        # prepare() must discard the cancelled task and create a live one.
         await persona.prepare()
         assert await persona.get_agent_subprocess() == "subprocess"
 
@@ -753,7 +757,7 @@ class TestProcessMessagePropagatesStartupFailure:
 
 
 class TestFunnelEvents:
-    """Telemetry funnel: requirements_met (construction) -> engagement (prepare)
+    """Event funnel: requirements_met (construction) -> engagement (prepare)
     -> login + usage (process_message)."""
 
     def test_requirements_met_emitted_on_construction(self, monkeypatch):
@@ -781,15 +785,10 @@ class TestFunnelEvents:
 
         assert "acp_requirements_met" in emitted
 
-    async def test_login_and_success_emitted_on_successful_message(self):
-        client = _make_client()
-        persona = _make_persona()
-        persona.get_client.return_value = client
-        persona.event_logger = MagicMock()
-        persona._login_emitted = False
-        persona._success_emitted = False
+    async def test_login_and_success_emitted_on_successful_prepare(self):
+        cls, persona = _make_lazy_persona()
 
-        await BaseAcpPersona.process_message(persona, _make_message("@bot hi"))
+        await persona.prepare()
 
         ops = [
             c.kwargs.get("data", {}).get("operation")
@@ -798,22 +797,23 @@ class TestFunnelEvents:
         assert "acp_login" in ops
         assert "acp_success" in ops
 
-    async def test_no_login_or_success_when_unauthenticated(self):
-        persona = _make_persona()
+    async def test_login_failure_and_no_success_when_unauthenticated(self):
+        cls, persona = _make_lazy_persona()
         persona.is_authed = AsyncMock(return_value=False)
-        persona.handle_no_auth = AsyncMock()
-        persona.event_logger = MagicMock()
-        persona._login_emitted = False
-        persona._success_emitted = False
 
-        await BaseAcpPersona.process_message(persona, _make_message("@bot hi"))
+        with pytest.raises(_NotAuthenticated):
+            await persona.prepare()
 
-        ops = [
-            c.kwargs.get("data", {}).get("operation")
+        calls = [
+            (
+                c.kwargs.get("data", {}).get("operation"),
+                c.kwargs.get("data", {}).get("outcome"),
+            )
             for c in persona.event_logger.emit.call_args_list
         ]
-        assert "acp_login" not in ops
-        assert "acp_success" not in ops
+        assert ("acp_login", "failure") in calls
+        assert ("acp_login", "success") not in calls
+        assert ("acp_success", "success") not in calls
 
 
 

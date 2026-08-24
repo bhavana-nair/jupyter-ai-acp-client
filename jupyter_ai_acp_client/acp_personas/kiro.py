@@ -181,7 +181,7 @@ class KiroAcpPersona(BaseAcpPersona):
             return True
         return await self._check_kiro_auth()
     
-    async def handle_no_auth(self, message: Message) -> None:
+    async def handle_no_auth(self, message: Message | None = None) -> None:
         await super().handle_no_auth(message)
 
         # Determine which command to show
