@@ -525,14 +525,6 @@ class BaseAcpPersona(BasePersona):
             "[%s] Received message while unauthenticated.", self.__class__.__name__
         )
 
-    async def handle_uncaught_exception(self, exc: Exception) -> None:
-        """Show the login prompt for an auth failure from `prepare()`; otherwise
-        fall back to the default error handling."""
-        if isinstance(exc, _NotAuthenticated):
-            await self.handle_no_auth(None)
-            return
-        await super().handle_uncaught_exception(exc)
-
     def _build_history_context(
         self,
         exclude_id: str | None = None,
@@ -1050,7 +1042,11 @@ class BaseAcpPersona(BasePersona):
         self._acp_session_usage = usage
 
     async def handle_uncaught_exception(self, exc: Exception) -> None:
-        """Show structured error info for ACP RequestError inside the standard dropdown."""
+        """Show the login prompt for an auth failure from `prepare()`; show
+        structured info for an ACP RequestError; otherwise fall back."""
+        if isinstance(exc, _NotAuthenticated):
+            await self.handle_no_auth(None)
+            return
         if not isinstance(exc, RequestError):
             await super().handle_uncaught_exception(exc)
             return
