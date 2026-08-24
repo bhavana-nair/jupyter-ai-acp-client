@@ -36,6 +36,10 @@ class PermissionHandler(APIHandler):
                 if not isinstance(persona, BaseAcpPersona):
                     logger.debug(f"    {persona_id}: not BaseAcpPersona, skipping")
                     continue
+                # Never-engaged: personas have no client 
+                if not persona._client_started():
+                    logger.debug(f"    {persona_id}: client not started, skipping")
+                    continue
                 client = await persona.get_client()
                 if client.includes_session(session_id):
                     logger.debug(f"    FOUND client for session {session_id}")
