@@ -71,6 +71,14 @@ class _NotAuthenticated(Exception):
 
 
 class BaseAcpPersona(BasePersona):
+    NOTEBOOK_EDITING_GUIDANCE: ClassVar[str] = (
+        "System note: When creating or editing Jupyter notebooks (.ipynb), use "
+        "the Jupyter notebook MCP tools (for example insert_cell, edit_cell, "
+        "delete_cell, read_notebook). Do not write or edit .ipynb files directly "
+        "with generic file-write/edit tools — direct writes are blocked to "
+        "prevent notebook corruption."
+    )
+
     _before_subprocess_future: ClassVar[Task[None] | None] = None
     """
     The task that blocks the agent subprocess from starting until resolved.
@@ -168,6 +176,8 @@ class BaseAcpPersona(BasePersona):
         self._executable = executable
         self._pending_session_recovery_context: bool = False
         self._was_initially_unauthenticated: bool = False
+        # Whether this session's notebook guidance was injected yet.
+        self._notebook_guidance_sent: bool = False
         self._emitted: set[str] = set()
         self._client_session_future: Task[
             NewSessionResponse | LoadSessionResponse
@@ -579,6 +589,11 @@ class BaseAcpPersona(BasePersona):
         client = await self.get_client()
         session_id = await self.get_session_id()
         prompt = message.body.strip()
+
+        # Inject notebook guidance once per session.
+        if not self._notebook_guidance_sent:
+            self._notebook_guidance_sent = True
+            prompt = self.NOTEBOOK_EDITING_GUIDANCE + "\n\n" + prompt
 
         if self._pending_session_recovery_context:
             self._pending_session_recovery_context = False

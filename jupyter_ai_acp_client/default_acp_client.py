@@ -503,6 +503,35 @@ class JaiAcpClient(Client):
         """Returns the list of active session IDs managed by this client."""
         return list(self._personas_by_session.keys())
 
+    @staticmethod
+    def _is_direct_notebook_write(tool_call: ToolCall, persona: BasePersona) -> bool:
+        """True if the tool call directly writes/edits an ``.ipynb``.
+
+        Blocks the corrupting path; exempts notebook MCP tools (titled
+        ``Running: @<server>/<tool>``), which are the safe way to edit.
+        """
+        def _is_ipynb(path: object) -> bool:
+            return isinstance(path, str) and Path(path).suffix == ".ipynb"
+
+        # Exempt MCP tool calls.
+        if (tool_call.title or "").startswith("Running: @"):
+            return False
+
+        raw_input = tool_call.raw_input if isinstance(tool_call.raw_input, dict) else {}
+
+        # Target path may appear in locations, raw_input path keys, or diffs.
+        for location in (tool_call.locations or []):
+            if _is_ipynb(getattr(location, "path", location)):
+                return True
+        for key in ("path", "file_path", "filepath", "filePath"):
+            if _is_ipynb(raw_input.get(key)):
+                return True
+
+        root_dir = persona.parent.root_dir
+        diffs = extract_diffs(tool_call.content, root_dir=root_dir) or \
+            extract_diffs_from_raw_input(raw_input, root_dir=root_dir)
+        return any(_is_ipynb(d.path) for d in (diffs or []))
+
     async def request_permission(
         self, options: list[PermissionOption], session_id: str, tool_call: ToolCall, **kwargs: Any
     ) -> RequestPermissionResponse:
@@ -523,6 +552,22 @@ class JaiAcpClient(Client):
                 f"options={[{'id': o.option_id, 'name': o.name, 'kind': o.kind} for o in options]} "
                 f"persona_class={persona.__class__.__name__}"
             )
+
+            # Block direct .ipynb writes; MCP notebook tools are exempt.
+            if self._is_direct_notebook_write(tool_call, persona):
+                persona.log.info(
+                    "request_permission: DENIED direct notebook write; "
+                    f"tool_call_id={tool_call.tool_call_id}"
+                )
+                persona.send_message(
+                    "⚠️ Direct edits to notebook (`.ipynb`) files are blocked to "
+                    "prevent corruption. Please edit the notebook using the "
+                    "Jupyter notebook MCP tools (for example `insert_cell` / "
+                    "`edit_cell`) instead of writing the file directly."
+                )
+                return RequestPermissionResponse(
+                    outcome=DeniedOutcome(outcome="cancelled")
+                )
 
             permission_options = list(options)
 
