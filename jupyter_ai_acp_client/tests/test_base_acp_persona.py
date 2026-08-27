@@ -817,3 +817,66 @@ class TestFunnelEvents:
 
 
 
+
+
+class TestOnUnauthenticated:
+    """
+    The `_on_unauthenticated()` seam `prepare()` calls when `is_authed()` is
+    False. The base default fast-fails (raise `_NotAuthenticated`); a persona
+    that waits for sign-in (e.g. Kiro) overrides it to prompt-and-return so
+    `prepare()` proceeds into its wait instead of ending. See the Kiro
+    auto-resume-after-login fix.
+    """
+
+    async def test_base_default_raises_not_authenticated(self):
+        """The base seam preserves the fast-fail contract."""
+        cls, persona = _make_lazy_persona()
+
+        with pytest.raises(_NotAuthenticated):
+            await persona._on_unauthenticated()
+
+    async def test_prepare_fast_fails_when_seam_raises(self):
+        """With the default seam, an unauthenticated prepare() raises and spawns
+        nothing (the fast-fail path used by non-waiting agents)."""
+        cls, persona = _make_lazy_persona()
+        persona.is_authed = AsyncMock(return_value=False)
+
+        with pytest.raises(_NotAuthenticated):
+            await persona.prepare()
+
+        assert "_subprocess_future" not in cls.__dict__
+        assert persona._client_session_future is None
+
+    async def test_prepare_proceeds_when_seam_does_not_raise(self):
+        """A persona overriding `_on_unauthenticated()` to return (not raise)
+        makes prepare() continue past the auth gate and start the
+        subprocess/client/session — even though `is_authed()` is False. This is
+        the mechanism behind Kiro's wait-for-login auto-resume: prepare() stays
+        alive and completes once the agent's own wait (before_agent_subprocess)
+        resolves, rather than ending on the first no-auth check.
+        """
+        called = {"seam": 0}
+
+        class _WaitingPersona(BaseAcpPersona):
+            event_loop = None
+            event_logger = None
+
+            @property
+            def defaults(self):
+                return MagicMock()
+
+            async def _on_unauthenticated(self) -> None:
+                # Show a prompt (elided here) and return without raising.
+                called["seam"] += 1
+
+        cls, persona = _make_lazy_persona(persona_cls=_WaitingPersona)
+        persona.is_authed = AsyncMock(return_value=False)
+
+        await persona.prepare()
+
+        # The seam ran instead of raising, and startup proceeded.
+        assert called["seam"] == 1
+        assert cls._subprocess_future is not None
+        assert cls._client_future is not None
+        assert persona._client_session_future is not None
+        assert await persona.get_agent_subprocess() == "subprocess"

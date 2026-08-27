@@ -420,7 +420,7 @@ class BaseAcpPersona(BasePersona):
 
         if not await self.is_authed():
             self.emit("acp_login", "failure")
-            raise _NotAuthenticated()
+            await self._on_unauthenticated()
 
         self.emit_once("acp_login")
 
@@ -454,6 +454,12 @@ class BaseAcpPersona(BasePersona):
             raise
 
         self.emit_once("acp_success")
+
+    async def _on_unauthenticated(self) -> None:
+        """
+        Called by `prepare()` when the auth pre-check (`is_authed()`) fails.
+        """
+        raise _NotAuthenticated()
 
     def _discard_failed_startup(self) -> None:
         """
