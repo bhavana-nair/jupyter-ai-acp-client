@@ -181,6 +181,9 @@ class KiroAcpPersona(BaseAcpPersona):
             return True
         return await self._check_kiro_auth()
     
+    async def _on_unauthenticated(self) -> None:
+        await self.handle_no_auth(None)
+
     async def handle_no_auth(self, message: Message | None = None) -> None:
         await super().handle_no_auth(message)
 
