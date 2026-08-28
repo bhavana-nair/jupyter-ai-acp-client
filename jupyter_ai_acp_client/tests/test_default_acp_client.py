@@ -409,3 +409,33 @@ class TestLoadSessionCleanup:
             await client.load_session(persona, "stale-session-id")
 
         assert "stale-session-id" not in client._loading_sessions
+
+
+class TestWriteTextFileNotebookGuard:
+    """write_text_file refuses direct writes to .ipynb files (notebooks must be
+    edited via the notebook MCP tools), while other files write normally."""
+
+    async def test_write_to_notebook_is_rejected(self, tmp_path):
+        client, _, _ = _make_client_and_persona()
+        nb_path = str(tmp_path / "analysis.ipynb")
+
+        with pytest.raises(RequestError) as exc_info:
+            await client.write_text_file(
+                content='{"cells": []}', path=nb_path, session_id=SESSION_ID
+            )
+
+        assert exc_info.value.code == -32602  # invalid_params
+        assert "MCP tools" in str(exc_info.value.data)
+        # The notebook file must not have been created.
+        assert not (tmp_path / "analysis.ipynb").exists()
+
+    async def test_write_to_non_notebook_still_succeeds(self, tmp_path):
+        client, _, _ = _make_client_and_persona()
+        txt_path = tmp_path / "notes.txt"
+
+        result = await client.write_text_file(
+            content="hello", path=str(txt_path), session_id=SESSION_ID
+        )
+
+        assert result is not None
+        assert txt_path.read_text(encoding="utf-8") == "hello"

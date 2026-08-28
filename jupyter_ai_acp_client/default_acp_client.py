@@ -598,6 +598,18 @@ class JaiAcpClient(Client):
 
         file_path = Path(path)
 
+        # Block direct notebook writes.
+        if file_path.suffix == ".ipynb":
+            raise RequestError.invalid_params(
+                {
+                    "path": (
+                        "writing .ipynb files directly is not allowed; use the "
+                        "Jupyter notebook MCP tools (e.g. insert_cell, edit_cell) "
+                        "instead"
+                    )
+                }
+            )
+
         # Check if path is a directory
         if file_path.is_dir():
             raise RequestError.invalid_params({"path": "path cannot be a directory"})

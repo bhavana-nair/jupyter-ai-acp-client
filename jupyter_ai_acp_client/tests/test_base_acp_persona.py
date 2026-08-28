@@ -133,6 +133,40 @@ class TestProcessMessageAttachments:
             root_dir="/home/user/notebooks",
         )
 
+    async def test_notebook_guidance_prepended_on_first_message(self):
+        """The first message of a session is prefixed with the agent-agnostic
+        notebook-editing guidance, then the flag flips so it isn't repeated."""
+        client = _make_client()
+        persona = _make_persona()
+        persona.get_client.return_value = client
+        persona._notebook_guidance_sent = False  # simulate a fresh session
+        msg = _make_message("@bot add a cell")
+
+        await BaseAcpPersona.process_message(persona, msg)
+
+        sent_prompt = client.prompt_and_reply.call_args.kwargs["prompt"]
+        assert sent_prompt.startswith(BaseAcpPersona.NOTEBOOK_EDITING_GUIDANCE)
+        assert sent_prompt.endswith("@bot add a cell")
+        # Flag flipped so subsequent messages don't repeat the guidance.
+        assert persona._notebook_guidance_sent is True
+
+    async def test_notebook_guidance_not_repeated(self):
+        """Once guidance has been sent, later messages are passed through as-is."""
+        client = _make_client()
+        persona = _make_persona()
+        persona.get_client.return_value = client
+        persona._notebook_guidance_sent = True  # already sent earlier this session
+        msg = _make_message("@bot another request")
+
+        await BaseAcpPersona.process_message(persona, msg)
+
+        client.prompt_and_reply.assert_called_once_with(
+            session_id="sess-1",
+            prompt="@bot another request",
+            attachments=None,
+            root_dir="/home/user/notebooks",
+        )
+
     async def test_single_attachment(self):
         """A single known attachment ID resolves to a dict."""
         client = _make_client()
