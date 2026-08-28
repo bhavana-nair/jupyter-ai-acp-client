@@ -12,12 +12,8 @@ from acp.schema import (
     AvailableCommandsUpdate,
     ConfigOptionUpdate,
     CurrentModeUpdate,
-    DeniedOutcome,
-    FileEditToolCallContent,
     ResourceContentBlock,
     TextContentBlock,
-    ToolCall,
-    ToolCallLocation,
     Usage,
     UsageUpdate,
 )
@@ -415,161 +411,31 @@ class TestLoadSessionCleanup:
         assert "stale-session-id" not in client._loading_sessions
 
 
-def _tool_call(**kwargs) -> ToolCall:
-    """Build a ToolCall with sensible defaults for permission tests."""
-    kwargs.setdefault("tool_call_id", "tc-1")
-    kwargs.setdefault("title", "Edit")
-    return ToolCall(**kwargs)
+class TestWriteTextFileNotebookGuard:
+    """write_text_file refuses direct writes to .ipynb files (notebooks must be
+    edited via the notebook MCP tools), while other files write normally."""
 
+    async def test_write_to_notebook_is_rejected(self, tmp_path):
+        client, _, _ = _make_client_and_persona()
+        nb_path = str(tmp_path / "analysis.ipynb")
 
-class TestRequestPermissionNotebookGuard:
-    """request_permission auto-denies any tool call that targets a Jupyter
-    notebook (.ipynb), regardless of which agent sent it or which field
-    exposes the path. Notebook edits must go through notebook MCP tools."""
+        with pytest.raises(RequestError) as exc_info:
+            await client.write_text_file(
+                content='{"cells": []}', path=nb_path, session_id=SESSION_ID
+            )
 
-    def _client_and_persona(self, root_dir="/work"):
-        client, _, persona = _make_client_and_persona()
-        # request_permission reads persona.parent.root_dir when extracting diffs.
-        persona.parent.root_dir = root_dir
-        # A real logger avoids MagicMock noise but isn't required.
-        persona.log = logging.getLogger("test")
-        return client, persona
+        assert exc_info.value.code == -32602  # invalid_params
+        assert "MCP tools" in str(exc_info.value.data)
+        # The notebook file must not have been created.
+        assert not (tmp_path / "analysis.ipynb").exists()
 
-    async def test_denies_when_locations_has_ipynb(self):
-        client, persona = self._client_and_persona()
-        client._personas_by_session = {SESSION_ID: persona}
-        persona.send_message = MagicMock()
-        tool_call = _tool_call(
-            kind="edit",
-            locations=[ToolCallLocation(path="/work/analysis.ipynb")],
+    async def test_write_to_non_notebook_still_succeeds(self, tmp_path):
+        client, _, _ = _make_client_and_persona()
+        txt_path = tmp_path / "notes.txt"
+
+        result = await client.write_text_file(
+            content="hello", path=str(txt_path), session_id=SESSION_ID
         )
 
-        resp = await client.request_permission(
-            options=[], session_id=SESSION_ID, tool_call=tool_call
-        )
-
-        assert isinstance(resp.outcome, DeniedOutcome)
-        # No permission prompt should have been created for the user.
-        client._permission_manager.create_request.assert_not_called()
-        # The user is told why it was blocked (better UX than a silent hang).
-        persona.send_message.assert_called_once()
-        assert "MCP tools" in persona.send_message.call_args[0][0]
-
-    async def test_denies_when_edit_content_targets_ipynb(self):
-        client, persona = self._client_and_persona()
-        client._personas_by_session = {SESSION_ID: persona}
-        tool_call = _tool_call(
-            kind="edit",
-            content=[
-                FileEditToolCallContent(
-                    type="diff",
-                    path="/work/notebook.ipynb",
-                    new_text='{"cells": []}',
-                )
-            ],
-        )
-
-        resp = await client.request_permission(
-            options=[], session_id=SESSION_ID, tool_call=tool_call
-        )
-
-        assert isinstance(resp.outcome, DeniedOutcome)
-        client._permission_manager.create_request.assert_not_called()
-
-    async def test_denies_when_raw_input_diff_targets_ipynb(self):
-        client, persona = self._client_and_persona()
-        client._personas_by_session = {SESSION_ID: persona}
-        # Agents like OpenCode send a unified diff string in raw_input.
-        tool_call = _tool_call(
-            kind="edit",
-            raw_input={
-                "filepath": "/work/model.ipynb",
-                "diff": "@@ -1 +1 @@\n-old\n+new\n",
-            },
-        )
-
-        resp = await client.request_permission(
-            options=[], session_id=SESSION_ID, tool_call=tool_call
-        )
-
-        assert isinstance(resp.outcome, DeniedOutcome)
-        client._permission_manager.create_request.assert_not_called()
-
-    async def test_denies_when_raw_input_path_targets_ipynb(self):
-        """Kiro's direct file tools (strReplace / fsWrite) expose the target as
-        raw_input['path'] with no locations/content — the real e2e shape."""
-        client, persona = self._client_and_persona()
-        client._personas_by_session = {SESSION_ID: persona}
-        tool_call = _tool_call(
-            kind=None,
-            locations=None,
-            content=None,
-            raw_input={
-                "command": "strReplace",
-                "path": "/work/for_loop_examples.ipynb",
-                "oldStr": "a",
-                "newStr": "b",
-            },
-        )
-
-        resp = await client.request_permission(
-            options=[], session_id=SESSION_ID, tool_call=tool_call
-        )
-
-        assert isinstance(resp.outcome, DeniedOutcome)
-        client._permission_manager.create_request.assert_not_called()
-
-    async def test_non_notebook_edit_is_not_denied_by_guard(self):
-        """A .py edit must fall through to the normal permission flow, not be
-        auto-denied by the notebook guard."""
-        client, persona = self._client_and_persona()
-        client._personas_by_session = {SESSION_ID: persona}
-        # Make the permission flow resolve immediately as "denied/cancelled"
-        # via a completed future, so we can tell the guard did NOT short-circuit
-        # (create_request must be called).
-        fut = asyncio.get_running_loop().create_future()
-        fut.set_result(None)  # user cancelled → distinguishable from guard deny
-        client._permission_manager.create_request = MagicMock(return_value=fut)
-        client._tool_call_manager = MagicMock()
-
-        tool_call = _tool_call(
-            kind="edit",
-            locations=[ToolCallLocation(path="/work/script.py")],
-        )
-
-        await client.request_permission(
-            options=[], session_id=SESSION_ID, tool_call=tool_call
-        )
-
-        # The guard let it through to the normal flow.
-        client._permission_manager.create_request.assert_called_once()
-
-    async def test_mcp_notebook_tool_is_not_denied(self):
-        """MCP notebook tools (titled 'Running: @<server>/<tool>') are the safe
-        path and must NOT be denied, even though they reference an .ipynb."""
-        client, persona = self._client_and_persona()
-        client._personas_by_session = {SESSION_ID: persona}
-        fut = asyncio.get_running_loop().create_future()
-        fut.set_result(None)
-        client._permission_manager.create_request = MagicMock(return_value=fut)
-        client._tool_call_manager = MagicMock()
-
-        # Real shape from the logs: MCP insert_cell, path in raw_input.file_path.
-        tool_call = _tool_call(
-            title="Running: @Jupyter MCP Server/insert_cell",
-            kind=None,
-            locations=None,
-            content=None,
-            raw_input={
-                "file_path": "/work/for_loop_examples.ipynb",
-                "cell_type": "code",
-                "content": "print('hi')",
-            },
-        )
-
-        await client.request_permission(
-            options=[], session_id=SESSION_ID, tool_call=tool_call
-        )
-
-        # Not denied by the guard — normal permission flow was used.
-        client._permission_manager.create_request.assert_called_once()
+        assert result is not None
+        assert txt_path.read_text(encoding="utf-8") == "hello"
