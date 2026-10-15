@@ -2,7 +2,11 @@ import os
 import shutil
 
 from acp.exceptions import RequestError
-from jupyter_ai_persona_manager import PersonaDefaults, PersonaRequirementsUnmet
+from jupyter_ai_persona_manager import (
+    PersonaDefaults,
+    PersonaNotAuthenticated,
+    PersonaRequirementsUnmet,
+)
 from jupyterlab_chat.models import Message
 
 from ..base_acp_persona import BaseAcpPersona
@@ -11,7 +15,7 @@ from ..base_acp_persona import BaseAcpPersona
 if shutil.which("codex-acp") is None:
     raise PersonaRequirementsUnmet(
         "This persona requires `codex-acp`, the ACP adapter for OpenAI Codex."
-        " Install it via `npm install -g @zed-industries/codex-acp`"
+        " Install it via `npm install -g @agentclientprotocol/codex-acp`"
         " then restart."
     )
 
@@ -37,6 +41,18 @@ class CodexAcpPersona(BaseAcpPersona):
             avatar_path=avatar_path,
             system_prompt="unused",
         )
+
+    async def prepare(self) -> None:
+        # codex-acp rejects creating the session with `auth_required` (-32000)
+        # while the user is signed out, report it as not authenticated so the
+        # user is prompted to sign in.
+        try:
+            await super().prepare()
+        except RequestError as error:
+            if error.code != -32000:
+                raise
+            self.log.info("[Codex] Authentication required: %s", error)
+            raise PersonaNotAuthenticated() from error
 
     async def process_message(self, message: Message) -> None:
         try:
